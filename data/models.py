@@ -762,19 +762,38 @@ class ModalResponseChannel:
     unambiguously wherever it is serialized/iterated) and so future
     per-axis settings (e.g. a per-axis sensitivity override) have an
     obvious place to live without another restructuring.
+
+    Attributes:
+        axis: Which response direction this entry is.
+        hardware_channel_id: Assigned hardware channel.
+        display_name: The channel's own name/formula symbol (e.g.
+            "a_x") - freely editable, exactly like naming a channel in
+            the standard configuration view
+            (`data.models.Channel.display_name`). Empty means "not yet
+            named"; `gui/modal_setup_view.py` falls back to an
+            axis-derived default ("a_x"/"a_y"/"a_z") when displaying an
+            unnamed entry, rather than storing that default here -
+            keeps a genuinely unset name distinguishable from one the
+            user deliberately chose to match the default.
     """
 
     axis: ModalAxis = ModalAxis.X
     hardware_channel_id: str = ""
+    display_name: str = ""
 
     def to_dict(self) -> dict:
-        return {"axis": self.axis.value, "hardware_channel_id": self.hardware_channel_id}
+        return {
+            "axis": self.axis.value,
+            "hardware_channel_id": self.hardware_channel_id,
+            "display_name": self.display_name,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ModalResponseChannel":
         return cls(
             axis=ModalAxis(data.get("axis", ModalAxis.X.value)),
             hardware_channel_id=data.get("hardware_channel_id", ""),
+            display_name=data.get("display_name", ""),
         )
 
 
@@ -797,6 +816,24 @@ class ModalAnalysisConfig:
         excitation_channel_hardware_id: Hardware channel of the impact
             hammer (`Channel.hardware_channel`) - always exactly ONE, a
             hammer test excites in a single direction at a time.
+        excitation_axis: Which direction the excitation is applied in -
+            unlike a response channel (whose axis IS its identity, see
+            `ModalResponseChannel`), the excitation has only ever had
+            an assigned hardware channel, not a direction; a hammer
+            strike along Y rather than X changes which cross-axis FRFs
+            the measurement actually represents, so it needs to be
+            recorded too.
+        excitation_display_name: The excitation channel's own name/
+            formula symbol (e.g. "F") - same "empty means not yet
+            named, fall back to a sensible default for display" pattern
+            as `ModalResponseChannel.display_name`.
+        result_storage_format: File format for the exported analysis
+            RESULTS (FRF/coherence sidecar, see the design plan's
+            export step) - deliberately separate from
+            `MeasurementConfig.storage_format`, which is the raw
+            time-domain recording's format: an operator may well want
+            the bulky raw stream as compact Parquet while keeping the
+            small, human-inspectable result file as CSV, or vice versa.
         response_channels: The response accelerometer's axes assigned
             to hardware channels (see `ModalResponseChannel`) - 1 to 3
             entries depending on whether a uniaxial, biaxial or
@@ -856,6 +893,9 @@ class ModalAnalysisConfig:
     """
 
     excitation_channel_hardware_id: str = ""
+    excitation_axis: ModalAxis = ModalAxis.X
+    excitation_display_name: str = ""
+    result_storage_format: StorageFormat = StorageFormat.PARQUET
     response_channels: list[ModalResponseChannel] = field(default_factory=list)
     excitation_window: str = "force"
     response_window: str = "exponential"
@@ -873,6 +913,9 @@ class ModalAnalysisConfig:
     def to_dict(self) -> dict:
         return {
             "excitation_channel_hardware_id": self.excitation_channel_hardware_id,
+            "excitation_axis": self.excitation_axis.value,
+            "excitation_display_name": self.excitation_display_name,
+            "result_storage_format": self.result_storage_format.value,
             "response_channels": [rc.to_dict() for rc in self.response_channels],
             "excitation_window": self.excitation_window,
             "response_window": self.response_window,
@@ -892,6 +935,11 @@ class ModalAnalysisConfig:
     def from_dict(cls, data: dict) -> "ModalAnalysisConfig":
         return cls(
             excitation_channel_hardware_id=data.get("excitation_channel_hardware_id", ""),
+            excitation_axis=ModalAxis(data.get("excitation_axis", ModalAxis.X.value)),
+            excitation_display_name=data.get("excitation_display_name", ""),
+            result_storage_format=StorageFormat(
+                data.get("result_storage_format", StorageFormat.PARQUET.value)
+            ),
             response_channels=[
                 ModalResponseChannel.from_dict(rc) for rc in data.get("response_channels", []) or []
             ],

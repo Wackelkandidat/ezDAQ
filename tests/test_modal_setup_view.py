@@ -56,6 +56,12 @@ class ChannelAssignmentValidationTest(unittest.TestCase):
         self._config_manager = ConfigurationManager(Path(self._tmp_dir.name))
         self._view = ModalSetupView(self._config_manager)
         self._view.set_discovered_devices([_TEST_DEVICE])
+        # build_current_config() calls show_error(), which for real
+        # would open a genuinely blocking native QMessageBox - replaced
+        # with a no-op that records the message, so the validation
+        # tests below stay deterministic and headless.
+        self._errors_shown: list[str] = []
+        self._view.show_error = self._errors_shown.append
 
     def tearDown(self) -> None:
         self._view.close()
@@ -67,6 +73,7 @@ class ChannelAssignmentValidationTest(unittest.TestCase):
         self._view._channel_states["x"] = _ChannelRowState(hardware_channel_id="cDAQ1Mod1/ai1")
 
         self.assertIsNone(self._view.build_current_config())
+        self.assertEqual(len(self._errors_shown), 1)
 
     def test_missing_any_response_channel_refuses_to_build_a_config(self) -> None:
         self._view._channel_states[_ROLE_EXCITATION] = _ChannelRowState(
@@ -74,6 +81,7 @@ class ChannelAssignmentValidationTest(unittest.TestCase):
         )
 
         self.assertIsNone(self._view.build_current_config())
+        self.assertEqual(len(self._errors_shown), 1)
 
     def test_excitation_and_one_response_axis_is_enough_to_start(self) -> None:
         self._view._channel_states[_ROLE_EXCITATION] = _ChannelRowState(
@@ -298,6 +306,219 @@ class RetranslateTest(unittest.TestCase):
                 view.retranslate_ui()
 
                 self.assertEqual(view._estimator_combo.currentData(), selected_estimator)
+            finally:
+                view.close()
+                view.deleteLater()
+                _app().processEvents()
+        finally:
+            tmp_dir.cleanup()
+
+
+class ChannelNameAndExcitationAxisTest(unittest.TestCase):
+    """The channel's own name/formula symbol (freely editable, same as
+    the standard configuration view) and the excitation channel's
+    direction - see `data/models.py::ModalAnalysisConfig.
+    excitation_axis`/`excitation_display_name`."""
+
+    def setUp(self) -> None:
+        _app()
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._view = ModalSetupView(ConfigurationManager(Path(self._tmp_dir.name)))
+        self._view.set_discovered_devices([_TEST_DEVICE])
+        self._view._channel_states[_ROLE_EXCITATION] = _ChannelRowState(
+            hardware_channel_id="cDAQ1Mod1/ai0"
+        )
+        self._view._channel_states["x"] = _ChannelRowState(hardware_channel_id="cDAQ1Mod1/ai1")
+
+    def tearDown(self) -> None:
+        self._view.close()
+        self._view.deleteLater()
+        _app().processEvents()
+        self._tmp_dir.cleanup()
+
+    def test_the_word_hammer_no_longer_appears_in_the_excitation_label(self) -> None:
+        from gui.i18n import t
+
+        self.assertNotIn("Hammer", t("modal_excitation_label"))
+
+    def test_empty_display_name_falls_back_to_the_axis_derived_default(self) -> None:
+        config = self._view.build_current_config()
+
+        excitation, response_x = config.channels
+        self.assertEqual(excitation.display_name, "F")
+        self.assertEqual(response_x.display_name, "a_x")
+
+    def test_custom_display_name_is_used_when_entered(self) -> None:
+        self._view._display_name_edits[_ROLE_EXCITATION].setText("F1")
+        self._view._display_name_edits["x"].setText("a_horizontal")
+
+        config = self._view.build_current_config()
+
+        excitation, response_x = config.channels
+        self.assertEqual(excitation.display_name, "F1")
+        self.assertEqual(response_x.display_name, "a_horizontal")
+
+    def test_excitation_axis_defaults_to_x_and_is_configurable(self) -> None:
+        self.assertEqual(self._view.current_modal_config().excitation_axis.value, "x")
+
+        index = self._view._excitation_axis_combo.findData("y")
+        self._view._excitation_axis_combo.setCurrentIndex(index)
+
+        self.assertEqual(self._view.current_modal_config().excitation_axis.value, "y")
+
+    def test_display_names_and_excitation_axis_persist_and_reload(self) -> None:
+        self._view._display_name_edits[_ROLE_EXCITATION].setText("F1")
+        self._view._display_name_edits["x"].setText("a_x1")
+        index = self._view._excitation_axis_combo.findData("z")
+        self._view._excitation_axis_combo.setCurrentIndex(index)
+        config_manager = self._view._configuration_manager
+        config_manager.update_last_modal_config(self._view.current_modal_config())
+
+        reloaded_view = ModalSetupView(ConfigurationManager(Path(self._tmp_dir.name)))
+        try:
+            self.assertEqual(reloaded_view._display_name_edits[_ROLE_EXCITATION].text(), "F1")
+            self.assertEqual(reloaded_view._display_name_edits["x"].text(), "a_x1")
+            self.assertEqual(reloaded_view._excitation_axis_combo.currentData(), "z")
+        finally:
+            reloaded_view.close()
+            reloaded_view.deleteLater()
+            _app().processEvents()
+
+
+class SectionHeaderStyleTest(unittest.TestCase):
+    """Section headers should carry the same emphasis as
+    `gui/setup_view.py::SetupView` - see
+    `ModalSetupView._apply_section_header_emphasis`."""
+
+    def test_section_headers_are_bold_and_enlarged(self) -> None:
+        _app()
+        tmp_dir = tempfile.TemporaryDirectory()
+        try:
+            view = ModalSetupView(ConfigurationManager(Path(tmp_dir.name)))
+            try:
+                base_point_size = view.font().pointSize()
+                for header in (
+                    view._device_header,
+                    view._channel_header,
+                    view._parameter_header,
+                    view._measurement_header,
+                    view._storage_header,
+                ):
+                    self.assertTrue(header.font().bold())
+                    if base_point_size > 0:
+                        self.assertGreater(header.font().pointSize(), base_point_size)
+            finally:
+                view.close()
+                view.deleteLater()
+                _app().processEvents()
+        finally:
+            tmp_dir.cleanup()
+
+
+class DeviceTreeTest(unittest.TestCase):
+    """`set_discovered_devices`/`show_discovery_error` - same rendering
+    style as `gui/setup_view.py::SetupView`'s device tree (see
+    `ModalSetupView._build_device_section`)."""
+
+    def setUp(self) -> None:
+        _app()
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._view = ModalSetupView(ConfigurationManager(Path(self._tmp_dir.name)))
+
+    def tearDown(self) -> None:
+        self._view.close()
+        self._view.deleteLater()
+        _app().processEvents()
+        self._tmp_dir.cleanup()
+
+    def test_a_device_is_rendered_with_its_module_and_channels(self) -> None:
+        self._view.set_discovered_devices([_TEST_DEVICE])
+
+        self.assertEqual(self._view._device_list.topLevelItemCount(), 1)
+        top_item = self._view._device_list.topLevelItem(0)
+        self.assertIn("NI9234", top_item.text(0))
+        self.assertEqual(top_item.childCount(), 4)
+
+    def test_no_devices_shows_a_hint_instead_of_an_empty_tree(self) -> None:
+        self._view.set_discovered_devices([])
+
+        self.assertEqual(self._view._device_list.topLevelItemCount(), 1)
+
+    def test_discovery_error_replaces_the_tree_with_the_message(self) -> None:
+        self._view.set_discovered_devices([_TEST_DEVICE])
+
+        self._view.show_discovery_error("kein Treiber gefunden")
+
+        self.assertEqual(self._view._device_list.topLevelItemCount(), 1)
+        self.assertIn("kein Treiber gefunden", self._view._device_list.topLevelItem(0).text(0))
+        self.assertIsNone(self._view.get_discovered_devices())
+
+
+class ChannelTableTest(unittest.TestCase):
+    """The channel table itself (`_channel_table`) - fixed 4-row/5-column
+    structure, `_PickerCell` reuse for the hardware-channel column."""
+
+    def setUp(self) -> None:
+        _app()
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._view = ModalSetupView(ConfigurationManager(Path(self._tmp_dir.name)))
+        self._view.set_discovered_devices([_TEST_DEVICE])
+
+    def tearDown(self) -> None:
+        self._view.close()
+        self._view.deleteLater()
+        _app().processEvents()
+        self._tmp_dir.cleanup()
+
+    def test_table_has_one_row_per_role_and_five_columns(self) -> None:
+        self.assertEqual(self._view._channel_table.rowCount(), 4)
+        self.assertEqual(self._view._channel_table.columnCount(), 5)
+
+    def test_picker_cell_reflects_the_assigned_hardware_channel(self) -> None:
+        self._view._channel_states[_ROLE_EXCITATION] = _ChannelRowState(
+            hardware_channel_id="cDAQ1Mod1/ai0"
+        )
+        self._view._refresh_channel_row_label(_ROLE_EXCITATION)
+
+        # `_PickerCell` exposes no text getter (see its own docstring:
+        # setText/setToolTip/setIcon/setIconSize/clicked only) - reading
+        # its internal label is the only way to verify the displayed
+        # text, same as elsewhere in this codebase's tests reaching into
+        # a widget's private internals.
+        self.assertEqual(
+            self._view._channel_labels[_ROLE_EXCITATION]._label.text(), "cDAQ1Mod1/ai0"
+        )
+
+    def test_response_rows_show_their_fixed_axis_read_only(self) -> None:
+        y_axis_widget = self._view._channel_table.cellWidget(2, ModalSetupView._COL_AXIS)
+        self.assertEqual(y_axis_widget.text(), "Y")
+
+    def test_excitation_row_axis_cell_is_the_editable_combo(self) -> None:
+        axis_widget = self._view._channel_table.cellWidget(0, ModalSetupView._COL_AXIS)
+        self.assertIs(axis_widget, self._view._excitation_axis_combo)
+
+
+class StartStopButtonStyleTest(unittest.TestCase):
+    """Record/Stop icon buttons, same style as
+    `gui/setup_view.py::SetupView` - see
+    `ModalSetupView._build_start_stop_section`."""
+
+    def test_buttons_have_icons_and_toggle_enabled_state_oppositely(self) -> None:
+        _app()
+        tmp_dir = tempfile.TemporaryDirectory()
+        try:
+            view = ModalSetupView(ConfigurationManager(Path(tmp_dir.name)))
+            try:
+                self.assertFalse(view._start_button.icon().isNull())
+                self.assertFalse(view._stop_button.icon().isNull())
+
+                view.set_start_enabled(False, "measurement_running")
+                self.assertFalse(view._start_button.isEnabled())
+                self.assertTrue(view._stop_button.isEnabled())
+
+                view.set_start_enabled(True)
+                self.assertTrue(view._start_button.isEnabled())
+                self.assertFalse(view._stop_button.isEnabled())
             finally:
                 view.close()
                 view.deleteLater()

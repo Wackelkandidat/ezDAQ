@@ -1612,7 +1612,9 @@ class MainWindow(QMainWindow):
             sample_rate_hz=effective_tick_rate_hz,
         )
         self._modal_storage_writer.start()
-        self._modal_live_view.start_display(modal_config, effective_tick_rate_hz)
+        self._modal_live_view.start_display(
+            modal_config, effective_tick_rate_hz, self._storage_path, config.name
+        )
 
         self._modal_setup_view.set_start_enabled(False, "measurement_running")
         self._set_nav_index(_VIEW_MODAL_LIVE)

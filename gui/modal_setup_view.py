@@ -36,7 +36,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QFont, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -45,11 +46,16 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -69,7 +75,23 @@ from data.models import (
     TriggerDirection,
 )
 from gui.i18n import connect_language_changed, t
-from gui.widgets.channel_table import HardwareChannelPickerDialog
+from gui.theme import (
+    PLAY_ICON_COLOR,
+    action_button_style,
+    connect_theme_changed,
+    disabled_text_color,
+    draw_ellipsis_icon,
+    draw_play_icon,
+    draw_stop_icon,
+    repolish,
+)
+# `_PickerCell` is reused verbatim here for the SAME look as the
+# standard configuration view's channel table (label + "..." button
+# that opens `HardwareChannelPickerDialog`) - its own docstring
+# describes it as a small, self-contained, reusable widget (not an
+# implementation detail specific to `ChannelTableWidget`), which is
+# exactly the case here.
+from gui.widgets.channel_table import HardwareChannelPickerDialog, _PickerCell
 from gui.widgets.spinbox import NoWheelSpinBox, PrecisionDoubleSpinBox
 
 # Mirrors `gui/setup_view.py::_STORAGE_FORMAT_LABEL_KEYS` - same i18n
@@ -130,6 +152,14 @@ _EXCITATION_SENSITIVITY_UNITS: list[tuple[str, float]] = [
 # response sensor).
 _ROLE_EXCITATION = "excitation"
 _RESPONSE_ROLES = [ModalAxis.X.value, ModalAxis.Y.value, ModalAxis.Z.value]
+
+# Shown as placeholder text (not a persisted value, see
+# `ModalAnalysisConfig.excitation_display_name`/
+# `ModalResponseChannel.display_name`) when the operator has not typed
+# their own name/formula symbol for a channel yet - matches the
+# customary symbols (force, acceleration) rather than a generic
+# "Kanal 1"-style placeholder.
+_DEFAULT_DISPLAY_NAMES = {_ROLE_EXCITATION: "F", "x": "a_x", "y": "a_y", "z": "a_z"}
 
 # Default sample rate for a new modal-analysis measurement - 51200/4, a
 # valid point on the NI9234's fixed rate grid (see
@@ -307,7 +337,8 @@ class ModalSetupView(QWidget):
         self._channel_states: dict[str, _ChannelRowState] = {
             role: _ChannelRowState() for role in [_ROLE_EXCITATION, *_RESPONSE_ROLES]
         }
-        self._channel_labels: dict[str, QLabel] = {}
+        # Populated in `_build_channel_section` (needs widgets to exist).
+        self._channel_labels: dict[str, _PickerCell] = {}
         self._impact_condition = TriggerCondition(threshold_direction=TriggerDirection.RISES_ABOVE)
         self._load_last_modal_config()
 
@@ -331,6 +362,7 @@ class ModalSetupView(QWidget):
         self._build_measurement_section(layout)
         self._build_storage_section(layout)
         self._build_start_stop_section(layout)
+        self._apply_section_header_emphasis()
 
         connect_language_changed(self.retranslate_ui)
 
@@ -339,28 +371,31 @@ class ModalSetupView(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_device_section(self, layout: QVBoxLayout) -> None:
-        # Deliberately compact - no persistent device TREE like
-        # `SetupView`'s (with its disconnect/unsupported-module warning
-        # dialogs): with only up to 4 fixed channels here, the
-        # `HardwareChannelPickerDialog` opened per row already shows a
-        # device's connection/support status inline (see
-        # `gui/widgets/channel_table.py`'s "device offline"/"module not
-        # supported" channel labels) exactly when it matters - reusing
-        # that instead of duplicating ~100 lines of tree rendering and
-        # warning-dialog bookkeeping for a view with this few channels.
+        # Same device TREE as `gui/setup_view.py::SetupView` (see
+        # `set_discovered_devices` below) - kept visually consistent
+        # with the standard configuration view rather than the earlier,
+        # more compact status-line version.
         self._device_header = QLabel(t("connected_devices"))
         layout.addWidget(self._device_header)
         device_group = QGroupBox()
-        device_layout = QHBoxLayout(device_group)
+        device_layout = QVBoxLayout(device_group)
+        discover_row = QHBoxLayout()
         self._discover_button = QPushButton(t("search_devices"))
         self._discover_button.clicked.connect(self.discover_hardware_requested.emit)
         self._open_ni_max_button = QPushButton(t("open_ni_max_button"))
         self._open_ni_max_button.clicked.connect(self.open_ni_max_requested.emit)
-        self._device_status_label = QLabel(t("no_devices_found"))
-        device_layout.addWidget(self._discover_button)
-        device_layout.addWidget(self._open_ni_max_button)
-        device_layout.addWidget(self._device_status_label, stretch=1)
+        discover_row.addWidget(self._discover_button)
+        discover_row.addWidget(self._open_ni_max_button)
+        self._device_list = QTreeWidget()
+        self._device_list.setHeaderHidden(True)
+        self._device_list.setMinimumHeight(120)
+        device_layout.addLayout(discover_row)
+        device_layout.addWidget(self._device_list)
         layout.addWidget(device_group)
+
+    # Column order of `_channel_table` - named so the retranslation code
+    # below does not repeat the raw indices.
+    _COL_DISPLAY_NAME, _COL_AXIS, _COL_HW_CHANNEL, _COL_PARAMETERS, _COL_CLEAR = range(5)
 
     def _build_channel_section(self, layout: QVBoxLayout) -> None:
         self._channel_header = QLabel(t("modal_channel_assignment_header"))
@@ -368,43 +403,114 @@ class ModalSetupView(QWidget):
         channel_group = QGroupBox()
         channel_layout = QVBoxLayout(channel_group)
 
-        self._excitation_row_label = QLabel(t("modal_excitation_label"))
-        channel_layout.addLayout(
-            self._build_channel_row(_ROLE_EXCITATION, self._excitation_row_label)
+        self._display_name_edits: dict[str, QLineEdit] = {}
+        self._channel_labels: dict[str, _PickerCell] = {}
+        self._row_header_items: dict[str, QTableWidgetItem] = {}
+
+        # Direction of the EXCITATION itself - a response channel's axis
+        # is its identity (see `_RESPONSE_ROLES`), but the excitation
+        # has so far only ever had a hardware channel, not a direction;
+        # which cross-axis FRF a measurement represents depends on it
+        # (see `data/models.py::ModalAnalysisConfig.excitation_axis`).
+        self._excitation_axis_combo = QComboBox()
+        for axis in ModalAxis:
+            self._excitation_axis_combo.addItem(axis.value.upper(), axis.value)
+        self._set_combo_by_data(self._excitation_axis_combo, self._modal_config.excitation_axis.value)
+
+        # One table, styled like the standard configuration view's
+        # channel table (`gui/widgets/channel_table.py::
+        # ChannelTableWidget`) - reusing its `_PickerCell` cell widget
+        # directly - rather than the earlier per-role QHBoxLayout rows,
+        # which looked visually inconsistent with the rest of the app.
+        # A genuinely dynamic, add/remove-row table (like the standard
+        # one) does not fit here though: the four rows - one excitation,
+        # up to three response axes - are a fixed structural part of
+        # `data/models.py::ModalAnalysisConfig`, not a free list.
+        roles = [_ROLE_EXCITATION, *_RESPONSE_ROLES]
+        self._channel_table = QTableWidget(len(roles), 5)
+        self._channel_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._channel_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._channel_table.horizontalHeader().setSectionResizeMode(
+            self._COL_HW_CHANNEL, QHeaderView.ResizeMode.Stretch
         )
+        self._channel_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._response_row_labels: dict[str, QLabel] = {}
-        for role in _RESPONSE_ROLES:
-            row_label = QLabel(t(f"modal_response_{role}_label"))
-            self._response_row_labels[role] = row_label
-            channel_layout.addLayout(self._build_channel_row(role, row_label))
+        for row, role in enumerate(roles):
+            row_header = QTableWidgetItem(self._role_label_text(role))
+            self._channel_table.setVerticalHeaderItem(row, row_header)
+            self._row_header_items[role] = row_header
+            self._build_channel_table_row(row, role)
 
+        self._retranslate_channel_table_header()
+        self._fix_channel_table_height()
+        channel_layout.addWidget(self._channel_table)
         layout.addWidget(channel_group)
 
-    def _build_channel_row(self, role: str, row_label: QLabel) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(row_label)
+    def _fix_channel_table_height(self) -> None:
+        """Sizes `_channel_table` to fit exactly its 4 rows plus the
+        header - a `QTableWidget` left at its default size policy
+        otherwise stretches to fill whatever space the layout offers,
+        which reads as a fifth, empty row below "Antwort Z" rather than
+        as the fixed 4-row table it actually is."""
+        header_height = self._channel_table.horizontalHeader().height()
+        rows_height = self._channel_table.verticalHeader().length()
+        frame = 2 * self._channel_table.frameWidth()
+        self._channel_table.setFixedHeight(header_height + rows_height + frame)
 
-        value_label = QLabel(t("modal_no_channel_assigned"))
-        self._channel_labels[role] = value_label
-        row.addWidget(value_label, stretch=1)
+    @staticmethod
+    def _role_label_text(role: str) -> str:
+        return t("modal_excitation_label") if role == _ROLE_EXCITATION else t(f"modal_response_{role}_label")
 
-        pick_button = QPushButton("...")
-        pick_button.setFixedWidth(32)
-        pick_button.clicked.connect(lambda _checked=False, r=role: self._on_pick_channel_clicked(r))
-        row.addWidget(pick_button)
+    def _build_channel_table_row(self, row: int, role: str) -> None:
+        # The channel's own name/formula symbol (e.g. "F", "a_x") -
+        # freely editable, exactly like naming a channel in the
+        # standard configuration view (`Channel.display_name`). Empty
+        # is a valid, deliberate state (see `_build_channel`/
+        # `current_modal_config`): the placeholder shows what will be
+        # used if the operator leaves it blank, without that default
+        # being persisted as if it had been chosen on purpose.
+        name_edit = QLineEdit(self._initial_display_names.get(role, ""))
+        name_edit.setPlaceholderText(_DEFAULT_DISPLAY_NAMES[role])
+        name_edit.setToolTip(t("modal_display_name_tooltip"))
+        self._display_name_edits[role] = name_edit
+        self._channel_table.setCellWidget(row, self._COL_DISPLAY_NAME, name_edit)
+
+        if role == _ROLE_EXCITATION:
+            self._channel_table.setCellWidget(row, self._COL_AXIS, self._excitation_axis_combo)
+        else:
+            axis_label = QLabel(role.upper())
+            axis_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._channel_table.setCellWidget(row, self._COL_AXIS, axis_label)
+
+        picker_cell = _PickerCell()
+        picker_cell.setText(t("modal_no_channel_assigned"))
+        picker_cell.setIcon(QIcon(draw_ellipsis_icon(14)))
+        picker_cell.setIconSize(QSize(14, 14))
+        picker_cell.clicked.connect(lambda r=role: self._on_pick_channel_clicked(r))
+        self._channel_labels[role] = picker_cell
+        self._channel_table.setCellWidget(row, self._COL_HW_CHANNEL, picker_cell)
 
         parameters_button = QPushButton(t("modal_edit_parameters_button"))
+        parameters_button.setIcon(QIcon(draw_ellipsis_icon(14)))
         parameters_button.clicked.connect(
             lambda _checked=False, r=role: self._on_edit_parameters_clicked(r)
         )
-        row.addWidget(parameters_button)
+        self._channel_table.setCellWidget(row, self._COL_PARAMETERS, parameters_button)
 
         clear_button = QPushButton(t("modal_clear_channel_button"))
         clear_button.clicked.connect(lambda _checked=False, r=role: self._on_clear_channel_clicked(r))
-        row.addWidget(clear_button)
+        self._channel_table.setCellWidget(row, self._COL_CLEAR, clear_button)
 
-        return row
+    def _retranslate_channel_table_header(self) -> None:
+        self._channel_table.setHorizontalHeaderLabels(
+            [
+                t("modal_column_display_name"),
+                t("modal_column_axis"),
+                t("modal_column_hardware_channel"),
+                t("modal_edit_parameters_button"),
+                t("modal_clear_channel_button"),
+            ]
+        )
 
     def _build_parameter_section(self, layout: QVBoxLayout) -> None:
         self._parameter_header = QLabel(t("modal_parameters_header"))
@@ -502,20 +608,34 @@ class ModalSetupView(QWidget):
         layout.addWidget(parameter_group)
 
     def _build_measurement_section(self, layout: QVBoxLayout) -> None:
+        # Only the sample rate - mirrors `gui/setup_view.py::SetupView`'s
+        # OWN split exactly: there too, "Messeinstellungen" holds just
+        # the sample rate, while name/storage format/location all sit
+        # under "Speichereinstellungen" (`_build_storage_section`) - both
+        # are, after all, statements about how/where the file is
+        # written, not about the measurement itself.
         self._measurement_header = QLabel(t("measurement_settings"))
         layout.addWidget(self._measurement_header)
         measurement_group = QGroupBox()
         form = QFormLayout(measurement_group)
-
-        self._name_edit = QLineEdit(self._configuration_manager.settings.last_measurement_name)
-        self._name_row_label = QLabel(f"{t('measurement_name')}:")
-        form.addRow(self._name_row_label, self._name_edit)
 
         self._sample_rate_spin = PrecisionDoubleSpinBox()
         self._sample_rate_spin.setRange(1.0, 1_000_000.0)
         self._sample_rate_spin.setValue(_DEFAULT_MODAL_SAMPLE_RATE_HZ)
         self._sample_rate_row_label = QLabel(f"{t('sample_rate_hz')}:")
         form.addRow(self._sample_rate_row_label, self._sample_rate_spin)
+
+        layout.addWidget(measurement_group)
+
+    def _build_storage_section(self, layout: QVBoxLayout) -> None:
+        self._storage_header = QLabel(t("storage_settings"))
+        layout.addWidget(self._storage_header)
+        storage_group = QGroupBox()
+        form = QFormLayout(storage_group)
+
+        self._name_edit = QLineEdit(self._configuration_manager.settings.last_measurement_name)
+        self._name_row_label = QLabel(f"{t('measurement_name')}:")
+        form.addRow(self._name_row_label, self._name_edit)
 
         self._storage_format_combo = QComboBox()
         for storage_format, key in _STORAGE_FORMAT_LABEL_KEYS.items():
@@ -526,11 +646,20 @@ class ModalSetupView(QWidget):
         self._storage_format_row_label = QLabel(f"{t('storage_format')}:")
         form.addRow(self._storage_format_row_label, self._storage_format_combo)
 
-        layout.addWidget(measurement_group)
+        # Deliberately SEPARATE from the raw-data format above - the
+        # exported analysis results (FRF/coherence sidecar, see the
+        # design plan's export step) are a different, much smaller file
+        # an operator may reasonably want in a different format (e.g.
+        # bulky raw Parquet, but a small, human-inspectable CSV result).
+        self._result_storage_format_combo = QComboBox()
+        for storage_format, key in _STORAGE_FORMAT_LABEL_KEYS.items():
+            self._result_storage_format_combo.addItem(t(key), storage_format.value)
+        self._set_combo_by_data(
+            self._result_storage_format_combo, self._modal_config.result_storage_format.value
+        )
+        self._result_storage_format_row_label = QLabel(f"{t('modal_result_storage_format_label')}:")
+        form.addRow(self._result_storage_format_row_label, self._result_storage_format_combo)
 
-    def _build_storage_section(self, layout: QVBoxLayout) -> None:
-        storage_group = QGroupBox()
-        form = QFormLayout(storage_group)
         self._storage_path_label = QLabel(t("no_storage_location"))
         self._storage_button = QPushButton(t("choose_storage_location"))
         self._storage_button.clicked.connect(self.storage_path_requested.emit)
@@ -540,18 +669,75 @@ class ModalSetupView(QWidget):
         layout.addWidget(storage_group)
 
     def _build_start_stop_section(self, layout: QVBoxLayout) -> None:
+        # Play/Stop icon pair, same drawing functions as
+        # `gui/setup_view.py::SetupView` - only one start button here
+        # (modal mode has no separate "live view only" vs. "record"
+        # choice, it always both records AND runs the impact-triggered
+        # analysis, see `build_current_config`'s `save_to_disk=True`),
+        # so Play is the natural icon for "start" rather than Record.
         row = QHBoxLayout()
-        self._start_button = QPushButton(t("start_measurement"))
+        self._start_button = QPushButton()
+        self._start_button.setIconSize(QSize(24, 24))
+        self._start_button.setStyleSheet(action_button_style())
         self._start_button.clicked.connect(self._on_start_clicked)
-        self._stop_button = QPushButton(t("stop_measurement"))
+        row.addWidget(self._start_button)
+
+        self._stop_button = QPushButton()
+        self._stop_button.setIconSize(QSize(24, 24))
+        self._stop_button.setStyleSheet(action_button_style())
         self._stop_button.setEnabled(False)
         self._stop_button.clicked.connect(self.stop_requested.emit)
-        row.addWidget(self._start_button)
         row.addWidget(self._stop_button)
+
+        self._retheme_start_stop_button_icons()
+        self._update_start_stop_button_labels()
+        connect_theme_changed(self._retheme_start_stop_button_icons)
         layout.addLayout(row)
 
         self._status_label = QLabel("")
         layout.addWidget(self._status_label)
+
+    def _retheme_start_stop_button_icons(self) -> None:
+        """Mirrors `gui/setup_view.py::SetupView._retheme_start_button_icons`
+        for the play/stop pair."""
+        self._start_button.setIcon(QIcon(draw_play_icon(24, y_offset=0.6, color=PLAY_ICON_COLOR)))
+        self._stop_button.setIcon(QIcon(draw_stop_icon(24, y_offset=0.6)))
+        for button in (self._start_button, self._stop_button):
+            repolish(button)
+
+    def _update_start_stop_button_labels(self) -> None:
+        # Own label ("Analyse starten") rather than the standard mode's
+        # "Aufnahme" (`record_button_label`) - modal mode always
+        # records (see `build_current_config`'s `save_to_disk=True`),
+        # but what actually starts is the impact-triggered analysis,
+        # not "a recording" in the generic sense the standard label
+        # implies.
+        self._start_button.setText(f"  {t('modal_start_button_label')}")
+        self._start_button.setToolTip(t("modal_start_button_label"))
+        self._stop_button.setText(f"  {t('stop_button_label')}")
+        self._stop_button.setToolTip(t("stop_measurement"))
+
+    def _apply_section_header_emphasis(self) -> None:
+        """Emphasizes only section labels and stays fully theme-safe -
+        identical to `gui/setup_view.py::SetupView.
+        _apply_section_header_emphasis`, duplicated rather than shared
+        so that file stays untouched by this feature (see the module
+        docstring)."""
+        header_font = QFont(self.font())
+        if header_font.pointSize() > 0:
+            header_font.setPointSize(header_font.pointSize() + 2)
+        header_font.setBold(True)
+
+        for header in (
+            self._device_header,
+            self._channel_header,
+            self._parameter_header,
+            self._measurement_header,
+            self._storage_header,
+        ):
+            header.setFont(header_font)
+            margins = header.contentsMargins()
+            header.setContentsMargins(margins.left(), 8, margins.right(), 4)
 
     @staticmethod
     def _set_combo_by_data(combo: QComboBox, value) -> None:
@@ -563,23 +749,61 @@ class ModalSetupView(QWidget):
     # ------------------------------------------------------------------ #
 
     def set_discovered_devices(self, devices: list[DeviceInfo]) -> None:
-        """Stores the latest discovery result for the channel picker
-        dialogs and updates the compact status label - see the module
-        docstring of `_build_device_section` for why there is no
-        persistent device tree here."""
+        """Renders the discovery result into `_device_list` - the same
+        one-line-per-device format as
+        `gui/setup_view.py::SetupView.set_discovered_devices` (product
+        type, module/connection status, channel count; grayed out when
+        offline or unsupported), WITHOUT that method's warning-dialog
+        memory: with only 4 fixed channel slots here, a problem device
+        is already visible right where it matters (grayed out in this
+        tree, and again inline in `HardwareChannelPickerDialog` when
+        actually picking a channel) - a modal interruption on every
+        affected discovery run would be redundant on top of that.
+        """
         self._discovered_devices = devices
-        usable = [d for d in devices if d.num_channels > 0]
-        self._device_status_label.setText(
-            f"{len(usable)} {t('devices_found')}" if usable else t("no_devices_found")
-        )
+        self._device_list.clear()
+        devices_with_channels = [d for d in devices if d.num_channels > 0 or d.has_any_channels]
+        if not devices_with_channels:
+            self._device_list.addTopLevelItem(QTreeWidgetItem([t("no_devices_found")]))
+            return
+        for device in devices_with_channels:
+            if device.connection_probed and not device.is_connected:
+                module_info = f" [{t('device_not_connected')}]"
+            elif device.module_type is None:
+                module_info = f" [{t('device_module_unsupported')}]"
+            else:
+                module_info = f" [{device.module_type.value}]"
+            device_item = QTreeWidgetItem(
+                [
+                    f"{device.device_name} - {device.product_type}{module_info} "
+                    f"({t('device_channel_count', count=device.num_channels)})"
+                ]
+            )
+            channels = device.physical_channels or [
+                f"{device.device_name}/ai{i}" for i in range(device.num_channels)
+            ]
+            for channel in channels:
+                device_item.addChild(QTreeWidgetItem([channel]))
+            if device.module_type is None or (
+                device.connection_probed and not device.is_connected
+            ):
+                brush = QBrush(disabled_text_color())
+                device_item.setForeground(0, brush)
+                for i in range(device_item.childCount()):
+                    device_item.child(i).setForeground(0, brush)
+            self._device_list.addTopLevelItem(device_item)
 
     def get_discovered_devices(self) -> list[DeviceInfo] | None:
         return self._discovered_devices
 
     def show_discovery_error(self, message: str) -> None:
-        """Mirrors `SetupView.show_discovery_error` - displayed in the
-        compact status label rather than a device tree."""
-        self._device_status_label.setText(message)
+        """Mirrors `SetupView.show_discovery_error` - the cause shown
+        directly in the device tree rather than only in the log."""
+        self._device_list.clear()
+        self._discovered_devices = None
+        self._device_list.addTopLevelItem(
+            QTreeWidgetItem([f"{t('device_discovery_failed')}: {message}"])
+        )
 
     def _find_device_for_channel(self, hardware_channel_id: str) -> DeviceInfo | None:
         for device in self._discovered_devices or []:
@@ -686,9 +910,9 @@ class ModalSetupView(QWidget):
             self.show_error(t("modal_error_no_response_channel"))
             return None
 
-        channels: list[Channel] = [self._build_channel(_ROLE_EXCITATION, t("modal_excitation_label"), "N")]
+        channels: list[Channel] = [self._build_channel(_ROLE_EXCITATION, "N")]
         for role in response_roles_assigned:
-            channels.append(self._build_channel(role, t(f"modal_response_{role}_label"), "g"))
+            channels.append(self._build_channel(role, "g"))
 
         return MeasurementConfig(
             name=self._name_edit.text().strip() or "Messung",
@@ -699,8 +923,15 @@ class ModalSetupView(QWidget):
             recording_unlimited=True,
         )
 
-    def _build_channel(self, role: str, display_name: str, unit: str) -> Channel:
+    def _resolved_display_name(self, role: str) -> str:
+        """The channel's name/formula symbol - the operator's own text
+        if they entered one, otherwise the same axis-derived default
+        shown as the field's placeholder (see `_DEFAULT_DISPLAY_NAMES`)."""
+        return self._display_name_edits[role].text().strip() or _DEFAULT_DISPLAY_NAMES[role]
+
+    def _build_channel(self, role: str, unit: str) -> Channel:
         state = self._channel_states[role]
+        display_name = self._resolved_display_name(role)
         device = self._find_device_for_channel(state.hardware_channel_id)
         # Falls back to NI9234 if the channel's device isn't in the
         # current discovery result (e.g. a saved configuration is
@@ -740,12 +971,19 @@ class ModalSetupView(QWidget):
         `ConfigurationManager.update_last_modal_config` and, later, by
         `ModalLiveView` to drive the impact detector/averager."""
         response_channels = [
-            ModalResponseChannel(axis=ModalAxis(role), hardware_channel_id=self._channel_states[role].hardware_channel_id)
+            ModalResponseChannel(
+                axis=ModalAxis(role),
+                hardware_channel_id=self._channel_states[role].hardware_channel_id,
+                display_name=self._display_name_edits[role].text().strip(),
+            )
             for role in _RESPONSE_ROLES
             if self._channel_states[role].hardware_channel_id
         ]
         return ModalAnalysisConfig(
             excitation_channel_hardware_id=self._channel_states[_ROLE_EXCITATION].hardware_channel_id,
+            excitation_axis=ModalAxis(self._excitation_axis_combo.currentData()),
+            excitation_display_name=self._display_name_edits[_ROLE_EXCITATION].text().strip(),
+            result_storage_format=StorageFormat(self._result_storage_format_combo.currentData()),
             response_channels=response_channels,
             excitation_window=self._excitation_window_combo.currentData(),
             response_window=self._response_window_combo.currentData(),
@@ -778,11 +1016,15 @@ class ModalSetupView(QWidget):
             hardware_channel_id=self._modal_config.excitation_channel_hardware_id,
             sensitivity_mv_per_unit=1.0,
         )
+        self._initial_display_names: dict[str, str] = {
+            _ROLE_EXCITATION: self._modal_config.excitation_display_name
+        }
         for response_channel in self._modal_config.response_channels:
             self._channel_states[response_channel.axis.value] = _ChannelRowState(
                 hardware_channel_id=response_channel.hardware_channel_id,
                 sensitivity_mv_per_unit=1.0,
             )
+            self._initial_display_names[response_channel.axis.value] = response_channel.display_name
         self._impact_condition = self._modal_config.impact_condition
 
     # ------------------------------------------------------------------ #
@@ -795,9 +1037,9 @@ class ModalSetupView(QWidget):
         self._open_ni_max_button.setText(t("open_ni_max_button"))
 
         self._channel_header.setText(t("modal_channel_assignment_header"))
-        self._excitation_row_label.setText(t("modal_excitation_label"))
-        for role, row_label in self._response_row_labels.items():
-            row_label.setText(t(f"modal_response_{role}_label"))
+        for role, row_header in self._row_header_items.items():
+            row_header.setText(self._role_label_text(role))
+        self._retranslate_channel_table_header()
         for role in self._channel_labels:
             self._refresh_channel_row_label(role)
 
@@ -821,18 +1063,20 @@ class ModalSetupView(QWidget):
         self._retranslate_direction_combo()
 
         self._measurement_header.setText(t("measurement_settings"))
-        self._name_row_label.setText(f"{t('measurement_name')}:")
         self._sample_rate_row_label.setText(f"{t('sample_rate_hz')}:")
-        self._storage_format_row_label.setText(f"{t('storage_format')}:")
-        self._retranslate_storage_format_combo()
 
+        self._storage_header.setText(t("storage_settings"))
+        self._name_row_label.setText(f"{t('measurement_name')}:")
+        self._storage_format_row_label.setText(f"{t('storage_format')}:")
+        self._retranslate_storage_format_combo(self._storage_format_combo)
+        self._result_storage_format_row_label.setText(f"{t('modal_result_storage_format_label')}:")
+        self._retranslate_storage_format_combo(self._result_storage_format_combo)
         self._storage_location_row_label.setText(f"{t('storage_location')}:")
         self._storage_button.setText(t("choose_storage_location"))
         if not self._storage_path_is_set:
             self._storage_path_label.setText(t("no_storage_location"))
 
-        self._start_button.setText(t("start_measurement"))
-        self._stop_button.setText(t("stop_measurement"))
+        self._update_start_stop_button_labels()
 
     @staticmethod
     def _retranslate_combo(combo: QComboBox, label_keys: dict) -> None:
@@ -855,11 +1099,12 @@ class ModalSetupView(QWidget):
         self._set_combo_by_data(self._impact_direction_combo, current_data)
         self._impact_direction_combo.blockSignals(False)
 
-    def _retranslate_storage_format_combo(self) -> None:
-        current_data = self._storage_format_combo.currentData()
-        self._storage_format_combo.blockSignals(True)
-        self._storage_format_combo.clear()
+    @staticmethod
+    def _retranslate_storage_format_combo(combo: QComboBox) -> None:
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
         for storage_format, key in _STORAGE_FORMAT_LABEL_KEYS.items():
-            self._storage_format_combo.addItem(t(key), storage_format.value)
-        self._set_combo_by_data(self._storage_format_combo, current_data)
-        self._storage_format_combo.blockSignals(False)
+            combo.addItem(t(key), storage_format.value)
+        ModalSetupView._set_combo_by_data(combo, current_data)
+        combo.blockSignals(False)

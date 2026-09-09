@@ -35,6 +35,7 @@ from data.models import (
     ModalResponseChannel,
     ModuleType,
     SignalType,
+    StorageFormat,
     TriggerCondition,
     TriggerDirection,
 )
@@ -213,7 +214,7 @@ class CaptureTest(unittest.TestCase):
         self._tmp_dir.cleanup()
 
     def test_clean_impact_is_captured_and_averaged(self) -> None:
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
         self.assertEqual(self._view._block_size, _BLOCK_SIZE)
 
         _run_ticks(self._fake, self._view, until=lambda v: v._averagers["x"].num_averages >= 1)
@@ -222,7 +223,7 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(self._view._row_kinds, ["captured"])
 
     def test_excitation_plot_is_populated_with_the_full_block(self) -> None:
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
@@ -230,7 +231,7 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(len(x_data), _BLOCK_SIZE)
 
     def test_frf_and_coherence_plots_are_populated_after_a_capture(self) -> None:
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
@@ -240,7 +241,7 @@ class CaptureTest(unittest.TestCase):
         self.assertGreater(len(freq_coh), 0)
 
     def test_undo_reverts_the_capture_and_the_row(self) -> None:
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
         self._view._on_undo_clicked()
@@ -249,7 +250,7 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(self._view._row_kinds, [])
 
     def test_reset_clears_averages_and_rebuilds_the_table(self) -> None:
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
         self._view._on_reset_clicked()
@@ -263,7 +264,7 @@ class CaptureTest(unittest.TestCase):
         hit table is full, further ticks must not silently keep
         averaging strikes with nowhere to show them."""
         config = _make_modal_config(num_averages_target=1)
-        self._view.start_display(config, _SAMPLE_RATE_HZ)
+        self._view.start_display(config, _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
         self.assertEqual(self._view._averagers["x"].num_averages, 1)
 
@@ -288,7 +289,7 @@ class OverloadRejectionTest(unittest.TestCase):
 
         view = ModalLiveView(controller)
         try:
-            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
             _run_ticks(fake, view, until=lambda v: v._status_label.text() != "" or v._row_kinds)
 
             self.assertEqual(view._averagers["x"].num_averages, 0)
@@ -327,7 +328,7 @@ class DoubleHitDialogTest(unittest.TestCase):
 
     def test_skip_marks_the_row_skipped_without_averaging(self) -> None:
         _click_button_with_role(QMessageBox.ButtonRole.DestructiveRole)
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
@@ -336,7 +337,7 @@ class DoubleHitDialogTest(unittest.TestCase):
 
     def test_retry_leaves_the_slot_pending(self) -> None:
         _click_button_with_role(QMessageBox.ButtonRole.AcceptRole)
-        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
         # "Retry" records nothing - run a fixed number of ticks rather
         # than waiting for a state that, by design, never changes.
@@ -350,7 +351,7 @@ class DoubleHitDialogTest(unittest.TestCase):
         `finish_capture()` must run for a REJECTED strike too, so its
         ringdown does not fake a second, immediate trigger."""
         _click_button_with_role(QMessageBox.ButtonRole.DestructiveRole)
-        self._view.start_display(_make_modal_config(min_rest_time_ms=500.0), _SAMPLE_RATE_HZ)
+        self._view.start_display(_make_modal_config(min_rest_time_ms=500.0), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
         _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
 
@@ -400,7 +401,7 @@ class MultiAxisTest(unittest.TestCase):
                     ModalResponseChannel(ModalAxis.Z, "cDAQ1Mod1/ai3"),
                 ]
             )
-            view.start_display(config, _SAMPLE_RATE_HZ)
+            view.start_display(config, _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
             self.assertTrue(view._axis_combo.isEnabled())
 
             _run_ticks(fake, view, until=lambda v: v._row_kinds)
@@ -422,7 +423,7 @@ class MultiAxisTest(unittest.TestCase):
 
         view = ModalLiveView(controller)
         try:
-            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
             self.assertFalse(view._axis_combo.isEnabled())
         finally:
             view.close()
@@ -442,7 +443,7 @@ class RetranslateTest(unittest.TestCase):
             channels = _make_channels()
             fake = _FakeRingBuffer()
             _attach_fake_ring_buffer(controller, fake, channels)
-            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ)
+            view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, Path("unused"), "TestMessung")
 
             view.retranslate_ui()
         finally:
@@ -450,6 +451,103 @@ class RetranslateTest(unittest.TestCase):
             view.deleteLater()
             _app().processEvents()
             tmp_dir.cleanup()
+
+
+class ExportResultsTest(unittest.TestCase):
+    """`_on_export_clicked` - the FRF/coherence sidecar written next to
+    the raw recording, additive and independent of it (see the method's
+    own docstring)."""
+
+    def setUp(self) -> None:
+        _app()
+        self._controller, self._config_tmp_dir = _make_controller()
+        self._export_tmp_dir = tempfile.TemporaryDirectory()
+        self._channels = _make_channels()
+        self._fake = _FakeRingBuffer()
+        _attach_fake_ring_buffer(self._controller, self._fake, self._channels)
+        self._fake.data[0, 5000] = 3.0
+        self._fake.data[1, 5000:5100] = 1.0
+        self._view = ModalLiveView(self._controller)
+
+    def tearDown(self) -> None:
+        self._view.close()
+        self._view.deleteLater()
+        _app().processEvents()
+        self._config_tmp_dir.cleanup()
+        self._export_tmp_dir.cleanup()
+
+    def test_export_without_any_average_shows_an_error_and_writes_nothing(self) -> None:
+        storage_path = Path(self._export_tmp_dir.name)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, storage_path, "Test")
+        errors: list[str] = []
+        self._view._show_error = errors.append
+
+        self._view._on_export_clicked()
+
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(list(storage_path.iterdir()), [])
+
+    def test_export_writes_one_frf_file_per_axis_with_data_plus_metadata(self) -> None:
+        storage_path = Path(self._export_tmp_dir.name)
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, storage_path, "Test")
+        _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
+        self.assertEqual(self._view._averagers["x"].num_averages, 1)  # sanity check on the fixture
+
+        self._view._on_export_clicked()
+
+        frf_path = storage_path / "Test_frf_x.parquet"
+        metadata_path = storage_path / "Test_modal_info.json"
+        self.assertTrue(frf_path.exists())
+        self.assertTrue(metadata_path.exists())
+
+        import json
+
+        import pandas as pd
+
+        frame = pd.read_parquet(frf_path)
+        self.assertEqual(
+            list(frame.columns),
+            [
+                "frequency_hz",
+                "accelerance_real",
+                "accelerance_imag",
+                "receptance_real",
+                "receptance_imag",
+                "coherence",
+            ],
+        )
+        self.assertTrue(frame["receptance_real"].iloc[0] != frame["receptance_real"].iloc[0])  # NaN
+
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["num_averages_actual"], {"x": 1})
+
+    def test_export_respects_the_configured_result_storage_format(self) -> None:
+        storage_path = Path(self._export_tmp_dir.name)
+        self._view.start_display(
+            _make_modal_config(result_storage_format=StorageFormat.CSV),
+            _SAMPLE_RATE_HZ,
+            storage_path,
+            "Test",
+        )
+        _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
+
+        self._view._on_export_clicked()
+
+        self.assertTrue((storage_path / "Test_frf_x.csv").exists())
+        self.assertFalse((storage_path / "Test_frf_x.parquet").exists())
+
+    def test_export_failure_is_reported_rather_than_raised(self) -> None:
+        # A storage path that does not exist -> writing fails, but the
+        # method must not propagate the exception to the button click.
+        storage_path = Path(self._export_tmp_dir.name) / "does_not_exist"
+        self._view.start_display(_make_modal_config(), _SAMPLE_RATE_HZ, storage_path, "Test")
+        _run_ticks(self._fake, self._view, until=lambda v: v._row_kinds)
+        errors: list[str] = []
+        self._view._show_error = errors.append
+
+        self._view._on_export_clicked()
+
+        self.assertEqual(len(errors), 1)
 
 
 if __name__ == "__main__":

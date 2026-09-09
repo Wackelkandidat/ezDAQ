@@ -43,9 +43,11 @@ Architecture, per GUI tick (`_UI_UPDATE_INTERVAL_MS`, same rate as
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -64,7 +66,8 @@ from analysis.modal_analysis import ModalAverager, resolve_block_size
 from core.controller import MeasurementController
 from core.impact_detector import ImpactDetector
 from core.measurement import apply_scaling
-from data.models import Channel, ModalAnalysisConfig
+from data.metadata import save_measurement_metadata
+from data.models import Channel, ModalAnalysisConfig, StorageFormat
 from gui.i18n import connect_language_changed, t
 from gui.modal_setup_view import _FRF_QUANTITY_LABEL_KEYS
 from gui.theme import (
@@ -122,6 +125,8 @@ class ModalLiveView(QWidget):
         self._controller = controller
 
         self._modal_config: Optional[ModalAnalysisConfig] = None
+        self._storage_path: Optional[Path] = None
+        self._measurement_name: str = ""
         self._detector: Optional[ImpactDetector] = None
         self._averagers: dict[str, ModalAverager] = {}
         self._reader_id: Optional[int] = None
@@ -228,6 +233,10 @@ class ModalLiveView(QWidget):
         self._reset_button.clicked.connect(self._on_reset_clicked)
         side_column.addWidget(self._reset_button)
 
+        self._export_button = QPushButton(t("modal_export_results_button"))
+        self._export_button.clicked.connect(self._on_export_clicked)
+        side_column.addWidget(self._export_button)
+
         self._stop_button = QPushButton(t("stop_measurement"))
         self._stop_button.clicked.connect(self.stop_requested.emit)
         side_column.addWidget(self._stop_button)
@@ -269,7 +278,13 @@ class ModalLiveView(QWidget):
     # Start/stop
     # ------------------------------------------------------------------ #
 
-    def start_display(self, modal_config: ModalAnalysisConfig, sample_rate_hz: float) -> None:
+    def start_display(
+        self,
+        modal_config: ModalAnalysisConfig,
+        sample_rate_hz: float,
+        storage_path: Path,
+        measurement_name: str,
+    ) -> None:
         """Begins the impact-triggered live display for a running modal
         measurement - called once by `MainWindow` right after
         `MeasurementController.start_measurement()` succeeds.
@@ -283,8 +298,14 @@ class ModalLiveView(QWidget):
                 resolved_sample_rate_hz`, not the raw requested rate -
                 same distinction `LiveView.start_display` makes), since
                 that is what the FFT block size must be derived from.
+            storage_path/measurement_name: Where the raw recording is
+                being written - `_on_export_clicked` writes the FRF/
+                coherence sidecar file(s) next to it, under the same
+                name (see `_on_export_clicked`).
         """
         self._modal_config = modal_config
+        self._storage_path = storage_path
+        self._measurement_name = measurement_name
         channels = self._controller.active_channels
         hardware_id_to_index = {channel.hardware_channel: i for i, channel in enumerate(channels)}
 
@@ -480,6 +501,80 @@ class ModalLiveView(QWidget):
         self._update_progress_label()
         self._status_label.setText("")
 
+    def _on_export_clicked(self) -> None:
+        """Writes the FRF/coherence sidecar - one file per response axis
+        that has at least one accepted average, plus one shared
+        metadata JSON - next to the raw recording
+        (`data/exporter.py::StorageWriter`, which this does not touch
+        at all: the raw stream keeps writing on its own for the whole
+        duration of the measurement, this only exports a SNAPSHOT of
+        the averages accumulated so far, reusable any time, including
+        while the measurement is still running).
+
+        BOTH accelerance (as measured) and receptance are written for
+        every axis, not just whichever quantity is currently displayed
+        - `ModalAverager.frf(quantity=...)` is cheap to call twice, and
+        which one an operator wants for further analysis is not
+        necessarily the one that happened to be on screen. The lowest
+        bins (receptance's DC guard, see `ModalAverager.frf`) are
+        written as NaN, not zero, so they cannot be mistaken for a
+        genuine zero crossing later.
+        """
+        if self._modal_config is None or self._storage_path is None:
+            return
+        axes_with_data = [
+            axis for axis, averager in self._averagers.items() if averager.num_averages > 0
+        ]
+        if not axes_with_data:
+            self._show_error(t("modal_export_no_averages_error"))
+            return
+
+        extension = ".parquet" if self._modal_config.result_storage_format == StorageFormat.PARQUET else ".csv"
+        try:
+            for axis in axes_with_data:
+                averager = self._averagers[axis]
+                accelerance = averager.frf("accelerance")
+                receptance = averager.frf("receptance")
+                frame = pd.DataFrame(
+                    {
+                        "frequency_hz": averager.frequency_hz(),
+                        "accelerance_real": accelerance.real,
+                        "accelerance_imag": accelerance.imag,
+                        "receptance_real": receptance.real,
+                        "receptance_imag": receptance.imag,
+                        "coherence": averager.coherence(),
+                    }
+                )
+                result_path = self._storage_path / f"{self._measurement_name}_frf_{axis}{extension}"
+                if self._modal_config.result_storage_format == StorageFormat.PARQUET:
+                    frame.to_parquet(result_path, index=False)
+                else:
+                    frame.to_csv(result_path, index=False)
+
+            metadata = {
+                "excitation_channel_hardware_id": self._modal_config.excitation_channel_hardware_id,
+                "excitation_axis": self._modal_config.excitation_axis.value,
+                "excitation_display_name": self._modal_config.excitation_display_name,
+                "excitation_window": self._modal_config.excitation_window,
+                "response_window": self._modal_config.response_window,
+                "estimator": self._modal_config.estimator,
+                "num_averages_target": self._modal_config.num_averages_target,
+                "num_averages_actual": {
+                    axis: self._averagers[axis].num_averages for axis in axes_with_data
+                },
+                "response_channels": [rc.to_dict() for rc in self._modal_config.response_channels],
+            }
+            metadata_path = self._storage_path / f"{self._measurement_name}_modal_info.json"
+            save_measurement_metadata(metadata_path, metadata)
+        except Exception as exc:
+            self._show_error(t("modal_export_failed_error", error=exc))
+            return
+
+        self._status_label.setText(t("modal_export_success_status", path=str(self._storage_path)))
+
+    def _show_error(self, message: str) -> None:
+        QMessageBox.warning(self, t("error"), message)
+
     # ------------------------------------------------------------------ #
     # Hit table / progress
     # ------------------------------------------------------------------ #
@@ -645,6 +740,7 @@ class ModalLiveView(QWidget):
         self._db_checkbox.setText(t("modal_db_toggle"))
         self._undo_button.setText(t("modal_undo_button"))
         self._reset_button.setText(t("modal_reset_button"))
+        self._export_button.setText(t("modal_export_results_button"))
         self._stop_button.setText(t("stop_measurement"))
 
         self._retranslate_plot_labels()

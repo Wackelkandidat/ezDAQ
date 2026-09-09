@@ -430,11 +430,26 @@ _translations = {
             "Modalanalyse - Live-Ansicht folgt in einem späteren Schritt."
         ),
         "modal_channel_assignment_header": "Kanalzuordnung",
-        "modal_excitation_label": "Anregung (Hammer)",
+        "modal_excitation_label": "Anregung",
         "modal_response_x_label": "Antwort X",
         "modal_response_y_label": "Antwort Y",
         "modal_response_z_label": "Antwort Z",
         "modal_no_channel_assigned": "nicht zugewiesen",
+        "modal_display_name_tooltip": (
+            "Messgröße/Formelsymbol dieses Kanals (z. B. F, a_x) - frei "
+            "wählbar, wie im normalen Messmodus."
+        ),
+        "modal_column_display_name": "Formelsymbol",
+        "modal_column_axis": "Achse",
+        "modal_column_hardware_channel": "Hardware-Kanal",
+        "modal_start_button_label": "Analyse starten",
+        "modal_result_storage_format_label": "Format für Analyseergebnisse",
+        "modal_export_results_button": "Ergebnisse exportieren",
+        "modal_export_no_averages_error": (
+            "Es liegt noch keine Mittelung vor - es gibt nichts zu exportieren."
+        ),
+        "modal_export_success_status": "Ergebnisse exportiert nach {path}.",
+        "modal_export_failed_error": "Export fehlgeschlagen:\n{error}",
         "modal_edit_parameters_button": "Parameter...",
         "modal_clear_channel_button": "Leeren",
         "modal_parameters_header": "Modalanalyse-Parameter",
@@ -475,7 +490,7 @@ _translations = {
         "modal_phase_axis_label": "Phase [°]",
         "modal_coherence_axis_label": "Kohärenz",
         "modal_db_toggle": "dB",
-        "modal_undo_button": "Letzten Schlag verwerfen",
+        "modal_undo_button": "Letzte Messung verwerfen",
         "modal_reset_button": "Zurücksetzen",
         "modal_hit_table_number": "#",
         "modal_hit_table_status": "Status",
@@ -992,11 +1007,26 @@ _translations = {
             "Modal analysis - live view coming in a later step."
         ),
         "modal_channel_assignment_header": "Channel Assignment",
-        "modal_excitation_label": "Excitation (Hammer)",
+        "modal_excitation_label": "Excitation",
         "modal_response_x_label": "Response X",
         "modal_response_y_label": "Response Y",
         "modal_response_z_label": "Response Z",
         "modal_no_channel_assigned": "not assigned",
+        "modal_display_name_tooltip": (
+            "This channel's quantity/formula symbol (e.g. F, a_x) - freely "
+            "editable, same as in the standard measurement mode."
+        ),
+        "modal_column_display_name": "Formula Symbol",
+        "modal_column_axis": "Axis",
+        "modal_column_hardware_channel": "Hardware Channel",
+        "modal_start_button_label": "Start Analysis",
+        "modal_result_storage_format_label": "Analysis Results Format",
+        "modal_export_results_button": "Export Results",
+        "modal_export_no_averages_error": (
+            "No average has been captured yet - there is nothing to export."
+        ),
+        "modal_export_success_status": "Results exported to {path}.",
+        "modal_export_failed_error": "Export failed:\n{error}",
         "modal_edit_parameters_button": "Parameters...",
         "modal_clear_channel_button": "Clear",
         "modal_parameters_header": "Modal Analysis Parameters",
@@ -1037,7 +1067,7 @@ _translations = {
         "modal_phase_axis_label": "Phase [°]",
         "modal_coherence_axis_label": "Coherence",
         "modal_db_toggle": "dB",
-        "modal_undo_button": "Discard Last Strike",
+        "modal_undo_button": "Discard Last Measurement",
         "modal_reset_button": "Reset",
         "modal_hit_table_number": "#",
         "modal_hit_table_status": "Status",
