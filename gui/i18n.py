@@ -426,11 +426,48 @@ _translations = {
             "Der Modus kann nicht während einer laufenden Messung "
             "gewechselt werden."
         ),
-        "modal_setup_placeholder": (
-            "Modalanalyse - Konfiguration folgt in einem späteren Schritt."
-        ),
         "modal_live_placeholder": (
             "Modalanalyse - Live-Ansicht folgt in einem späteren Schritt."
+        ),
+        "modal_channel_assignment_header": "Kanalzuordnung",
+        "modal_excitation_label": "Anregung (Hammer)",
+        "modal_response_x_label": "Antwort X",
+        "modal_response_y_label": "Antwort Y",
+        "modal_response_z_label": "Antwort Z",
+        "modal_no_channel_assigned": "nicht zugewiesen",
+        "modal_edit_parameters_button": "Parameter...",
+        "modal_clear_channel_button": "Leeren",
+        "modal_parameters_header": "Modalanalyse-Parameter",
+        "modal_excitation_window_label": "Anregungsfenster",
+        "modal_response_window_label": "Antwortfenster",
+        "modal_window_force": "Force-Fenster",
+        "modal_window_rectangular": "Rechteck",
+        "modal_window_exponential": "Exponentiell",
+        "modal_window_hann": "Hann",
+        "modal_frequency_resolution_label": "Frequenzauflösung Δf [Hz]",
+        "modal_num_averages_label": "Zielmittelungen",
+        "modal_estimator_label": "Schätzer",
+        "modal_estimator_h1": "H1 (rauscharme Anregung)",
+        "modal_estimator_h2": "H2 (rauscharme Antwort)",
+        "modal_frf_quantity_label": "Angezeigte Frequenzgang-Größe",
+        "modal_frf_quantity_accelerance": "Accelerance (Beschleunigung/Kraft)",
+        "modal_frf_quantity_mobility": "Mobility (Schnelle/Kraft)",
+        "modal_frf_quantity_receptance": "Nachgiebigkeit (Weg/Kraft)",
+        "modal_impact_threshold_label": "Schlag-Schwellwert",
+        "modal_pretrigger_label": "Vorlaufzeit [ms]",
+        "modal_double_hit_window_label": "Doppelschlag-Fenster [ms]",
+        "modal_double_hit_relative_threshold_label": "Doppelschlag-Schwellwert (relativ)",
+        "modal_min_rest_time_label": "Mindestruhezeit [ms]",
+        "modal_overload_fraction_label": "Übersteuerungsanteil",
+        "modal_channel_parameter_dialog_title": "Kanalparameter",
+        "modal_sensitivity_label": "Sensitivität",
+        "modal_error_no_excitation_channel": (
+            "Bitte einen Anregungskanal (Hammer) zuweisen, bevor die Messung "
+            "gestartet wird."
+        ),
+        "modal_error_no_response_channel": (
+            "Bitte mindestens einen Antwortkanal (X, Y oder Z) zuweisen, bevor "
+            "die Messung gestartet wird."
         ),
         "ok": "OK",
         "cancel": "Abbrechen",
@@ -931,11 +968,48 @@ _translations = {
         "mode_switch_blocked_while_running": (
             "The mode cannot be changed while a measurement is running."
         ),
-        "modal_setup_placeholder": (
-            "Modal analysis - configuration coming in a later step."
-        ),
         "modal_live_placeholder": (
             "Modal analysis - live view coming in a later step."
+        ),
+        "modal_channel_assignment_header": "Channel Assignment",
+        "modal_excitation_label": "Excitation (Hammer)",
+        "modal_response_x_label": "Response X",
+        "modal_response_y_label": "Response Y",
+        "modal_response_z_label": "Response Z",
+        "modal_no_channel_assigned": "not assigned",
+        "modal_edit_parameters_button": "Parameters...",
+        "modal_clear_channel_button": "Clear",
+        "modal_parameters_header": "Modal Analysis Parameters",
+        "modal_excitation_window_label": "Excitation Window",
+        "modal_response_window_label": "Response Window",
+        "modal_window_force": "Force Window",
+        "modal_window_rectangular": "Rectangular",
+        "modal_window_exponential": "Exponential",
+        "modal_window_hann": "Hann",
+        "modal_frequency_resolution_label": "Frequency Resolution Δf [Hz]",
+        "modal_num_averages_label": "Target Averages",
+        "modal_estimator_label": "Estimator",
+        "modal_estimator_h1": "H1 (low-noise excitation)",
+        "modal_estimator_h2": "H2 (low-noise response)",
+        "modal_frf_quantity_label": "Displayed FRF Quantity",
+        "modal_frf_quantity_accelerance": "Accelerance (acceleration/force)",
+        "modal_frf_quantity_mobility": "Mobility (velocity/force)",
+        "modal_frf_quantity_receptance": "Receptance (displacement/force)",
+        "modal_impact_threshold_label": "Impact Threshold",
+        "modal_pretrigger_label": "Pretrigger [ms]",
+        "modal_double_hit_window_label": "Double-Hit Window [ms]",
+        "modal_double_hit_relative_threshold_label": "Double-Hit Threshold (relative)",
+        "modal_min_rest_time_label": "Minimum Rest Time [ms]",
+        "modal_overload_fraction_label": "Overload Fraction",
+        "modal_channel_parameter_dialog_title": "Channel Parameters",
+        "modal_sensitivity_label": "Sensitivity",
+        "modal_error_no_excitation_channel": (
+            "Please assign an excitation channel (hammer) before starting "
+            "the measurement."
+        ),
+        "modal_error_no_response_channel": (
+            "Please assign at least one response channel (X, Y, or Z) "
+            "before starting the measurement."
         ),
         "ok": "OK",
         "cancel": "Cancel",

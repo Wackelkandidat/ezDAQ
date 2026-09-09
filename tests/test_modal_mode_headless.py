@@ -213,5 +213,51 @@ class ModalAnalysisConfigPersistenceTest(unittest.TestCase):
             self.assertEqual(restored, config)
 
 
+class ModalStartMeasurementErrorRoutingTest(unittest.TestCase):
+    """`_on_modal_start_measurement` must route failures to
+    `ModalSetupView`, never to the standard `SetupView` the user in
+    modal mode is not even looking at.
+
+    Deliberately NOT mocked: this environment has no NI-DAQmx driver
+    installed (same as every other hardware-touching test in this
+    project), so `controller.start_measurement(...)` reliably fails
+    with a real `AcquisitionError` - exercising the actual exception
+    path end to end rather than a stand-in for it.
+    """
+
+    def test_start_failure_shows_the_error_on_the_modal_view_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            window, controller, config_manager = _build_window(tmp_dir)
+            try:
+                window._storage_path = Path(tmp_dir)
+                window._modal_setup_view.set_storage_path(tmp_dir)
+                from gui.modal_setup_view import _ChannelRowState
+
+                window._modal_setup_view._channel_states["excitation"] = _ChannelRowState(
+                    hardware_channel_id="cDAQ1Mod1/ai0"
+                )
+                window._modal_setup_view._channel_states["x"] = _ChannelRowState(
+                    hardware_channel_id="cDAQ1Mod1/ai1"
+                )
+
+                modal_errors: list[str] = []
+                standard_errors: list[str] = []
+                window._modal_setup_view.show_error = modal_errors.append
+                window._setup_view.show_error = standard_errors.append
+
+                window._modal_setup_view._on_start_clicked()
+
+                self.assertEqual(len(modal_errors), 1)
+                self.assertEqual(standard_errors, [])
+                # A failed start must not persist a modal configuration -
+                # only a measurement that actually started should be
+                # remembered as "last used".
+                self.assertEqual(config_manager.settings.last_modal_config, {})
+            finally:
+                window.close()
+                window.deleteLater()
+                _app().processEvents()
+
+
 if __name__ == "__main__":
     unittest.main()

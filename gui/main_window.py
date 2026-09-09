@@ -148,6 +148,13 @@ class MainWindow(QMainWindow):
         self._update_check_silent: bool = True
 
         self._storage_writer: StorageWriter | None = None
+        # Separate from `_storage_writer` above - modal mode has its own
+        # start/stop path (`_on_modal_start_measurement`/
+        # `_on_modal_stop_measurement`) that never touches the standard
+        # one, so each keeps its own writer reference rather than
+        # sharing a name that could get confused about which flow
+        # currently owns it.
+        self._modal_storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
         # Prevents an automatic re-arm (`TriggerConfig.auto_rearm`) from
@@ -188,7 +195,7 @@ class MainWindow(QMainWindow):
         self._setup_view = SetupView(configuration_manager, self._sensor_database)
         self._live_view = LiveView(controller)
         self._analysis_view = AnalysisView()
-        self._modal_setup_view = ModalSetupView()
+        self._modal_setup_view = ModalSetupView(configuration_manager)
         self._modal_live_view = ModalLiveView(controller)
 
         self._build_navigation_and_workspace()
@@ -198,6 +205,7 @@ class MainWindow(QMainWindow):
 
         if self._storage_path is not None:
             self._setup_view.set_storage_path(str(self._storage_path))
+            self._modal_setup_view.set_storage_path(str(self._storage_path))
 
         # Signal connections of the views
         self._setup_view.discover_hardware_requested.connect(self._on_discover_hardware)
@@ -206,6 +214,17 @@ class MainWindow(QMainWindow):
         self._setup_view.stop_requested.connect(self._on_stop_measurement)
         self._setup_view.storage_path_requested.connect(self._on_choose_storage_path)
         self._setup_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
+        # Modal analysis mode - discovery/NI-MAX/storage are shared,
+        # app-wide concerns (same handlers as the standard SetupView);
+        # start/stop route to their own handlers (see
+        # `_on_modal_start_measurement`/`_on_modal_stop_measurement`) -
+        # modal mode never touches the standard trigger machinery or
+        # `LiveView` at all.
+        self._modal_setup_view.discover_hardware_requested.connect(self._on_discover_hardware)
+        self._modal_setup_view.open_ni_max_requested.connect(self._on_open_ni_max)
+        self._modal_setup_view.start_measurement_requested.connect(self._on_modal_start_measurement)
+        self._modal_setup_view.stop_requested.connect(self._on_modal_stop_measurement)
+        self._modal_setup_view.storage_path_requested.connect(self._on_choose_storage_path)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
         self._live_view.stop_requested.connect(self._on_stop_measurement)
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
@@ -907,6 +926,7 @@ class MainWindow(QMainWindow):
         self._configuration_manager.update_last_storage_path(directory)
         self._update_storage_status()
         self._setup_view.set_storage_path(str(self._storage_path))
+        self._modal_setup_view.set_storage_path(str(self._storage_path))
 
     def _update_storage_status(self) -> None:
         # Storage location display in the status bar removed; now only shown in the setup view
@@ -951,6 +971,7 @@ class MainWindow(QMainWindow):
         self._discovery_worker = None
         self._setup_view.set_discovery_in_progress(False)
         self._setup_view.set_discovered_devices(devices)
+        self._modal_setup_view.set_discovered_devices(devices)
         # Only count devices WITH analog input channels -
         # `System.local().devices` otherwise also includes pure chassis
         # entries without their own channels (e.g. "cDAQ9185-0217ED5E" in
@@ -1018,18 +1039,18 @@ class MainWindow(QMainWindow):
         current_devices = self._setup_view.get_discovered_devices()
         if not connection_states or not current_devices:
             return
-        self._setup_view.set_discovered_devices(
-            [
-                replace(
-                    device,
-                    is_connected=connection_states[device.device_name],
-                    connection_probed=True,
-                )
-                if device.device_name in connection_states
-                else device
-                for device in current_devices
-            ]
-        )
+        updated_devices = [
+            replace(
+                device,
+                is_connected=connection_states[device.device_name],
+                connection_probed=True,
+            )
+            if device.device_name in connection_states
+            else device
+            for device in current_devices
+        ]
+        self._setup_view.set_discovered_devices(updated_devices)
+        self._modal_setup_view.set_discovered_devices(updated_devices)
 
     def _on_connection_probe_failed(self, message: str) -> None:
         # Only logged, deliberately without a dialog or a status bar
@@ -1049,6 +1070,7 @@ class MainWindow(QMainWindow):
         # device browser itself, not just in the status bar/log - that's
         # where the user looks next.
         self._setup_view.show_discovery_error(message)
+        self._modal_setup_view.show_discovery_error(message)
 
     def _on_open_ni_max(self) -> None:
         """Opens NI-MAX (Measurement & Automation Explorer) as a separate
@@ -1399,6 +1421,7 @@ class MainWindow(QMainWindow):
         base_name: str,
         storage_format: StorageFormat,
         naming: NamingScheme,
+        error_view=None,
     ) -> str | None:
         """Builds the file/measurement name actually to be used from the
         entered measurement name, according to `naming`.
@@ -1408,6 +1431,13 @@ class MainWindow(QMainWindow):
         there so that a headless script gets exactly the same names and,
         above all, the same overwrite protection. All this adds is the
         error message in the setup view.
+
+        Args:
+            error_view: Which view's `show_error(message)` to call on a
+                name conflict - defaults to the standard `SetupView`;
+                pass `self._modal_setup_view` from the modal-mode start
+                path so the message actually reaches the view the user
+                is looking at.
 
         Returns:
             The resolved name, or None if the measurement should be
@@ -1424,7 +1454,7 @@ class MainWindow(QMainWindow):
                 naming=naming,
             )
         except MeasurementNameConflict as exc:
-            self._setup_view.show_error(t("error_name_conflict", name=exc.name))
+            (error_view or self._setup_view).show_error(t("error_name_conflict", name=exc.name))
             return None
 
     def _on_stop_measurement(self) -> None:
@@ -1514,6 +1544,114 @@ class MainWindow(QMainWindow):
             save_measurement_metadata(metadata_path, metadata)
         except Exception:
             logger.exception("Metadaten konnten nicht gespeichert werden")
+
+    # ------------------------------------------------------------------ #
+    # Modal analysis mode - start/stop
+    # ------------------------------------------------------------------ #
+
+    def _on_modal_start_measurement(self, config: MeasurementConfig) -> None:
+        """Starts a modal-analysis measurement - the raw multi-channel
+        recording only; the impact-triggered live display
+        (`gui/modal_live_view.py::ModalLiveView`) is wired up in a later
+        step (it will consume the same running session as an additional
+        ring-buffer reader, exactly like `LiveView` does for the
+        standard mode - nothing about starting the measurement itself
+        needs to change for that).
+
+        Deliberately NOT a call into `_on_start_measurement`: that
+        method hardcodes `self._setup_view` for error display/
+        `get_discovered_devices()` (would silently show errors on a
+        view the user in modal mode is not even looking at) and always
+        wires up `LiveView.start_display(...)`, which modal mode has no
+        use for at all (`LiveView` is not the visible page, and its own
+        trigger/display machinery is irrelevant here) - a dedicated,
+        smaller handler avoids both.
+
+        `config.trigger` is deliberately left at its default
+        (`TriggerKind.NONE`) - modal mode always records continuously,
+        see `data/models.py::ModalAnalysisConfig`'s docstring on
+        `impact_condition`.
+        """
+        if self._storage_path is None:
+            QMessageBox.warning(self, t("error_no_storage_title"), t("error_no_storage_body"))
+            return
+
+        resolved_name = self._resolve_measurement_name(
+            base_name=config.name,
+            storage_format=config.storage_format,
+            naming=config.naming,
+            error_view=self._modal_setup_view,
+        )
+        if resolved_name is None:
+            return
+        config.name = resolved_name
+
+        try:
+            session = self._controller.start_measurement(
+                config, discovered_devices=self._modal_setup_view.get_discovered_devices()
+            )
+        except Exception as exc:  # MeasurementConfigError, AcquisitionError, RuntimeError
+            logger.exception("Modalanalyse-Messung konnte nicht gestartet werden")
+            self._modal_setup_view.show_error(f"{t('cannot_start_measurement')}:\n{exc}")
+            return
+
+        self._configuration_manager.update_last_modal_config(
+            self._modal_setup_view.current_modal_config()
+        )
+
+        rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+        effective_tick_rate_hz = max(
+            (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
+        )
+        ring_buffer = self._controller.get_ring_buffer()
+        data_path = measurement_data_path(self._storage_path, config.name, config.storage_format)
+        self._modal_storage_writer = StorageWriter(
+            ring_buffer=ring_buffer,
+            channels=self._controller.active_channels,
+            output_path=data_path,
+            storage_format=config.storage_format,
+            sample_rate_hz=effective_tick_rate_hz,
+        )
+        self._modal_storage_writer.start()
+
+        self._modal_setup_view.set_start_enabled(False, "measurement_running")
+        self._set_nav_index(_VIEW_MODAL_LIVE)
+        self._set_measurement_status(config)
+
+        logger.info(
+            "Modalanalyse-Messung gestartet: %d Kanäle (%s)",
+            len(self._controller.active_channels),
+            [c.hardware_channel for c in self._controller.active_channels],
+        )
+
+    def _on_modal_stop_measurement(self) -> None:
+        """Stops a running modal-analysis measurement - mirrors the
+        essentials of `_on_stop_measurement` (device info read BEFORE
+        `stop_measurement()`, metadata via the shared, view-agnostic
+        `_finalize_measurement`), without any of the standard trigger/
+        serial-listener/auto-rearm handling modal mode never uses."""
+        device_infos = self._controller.active_device_infos
+        session = self._controller.stop_measurement()
+
+        if self._modal_storage_writer is not None:
+            self._modal_storage_writer.stop()
+            self._modal_storage_writer = None
+
+        if session is not None and self._storage_path is not None and session.config.save_to_disk:
+            self._finalize_measurement(session, device_infos)
+
+        if session is not None:
+            self._status_label.setText(
+                t(
+                    "measurement_completed_named",
+                    name=session.config.name,
+                    duration=f"{session.duration_seconds:.1f}",
+                )
+            )
+        else:
+            self._clear_measurement_status()
+
+        self._modal_setup_view.set_start_enabled(True)
 
     def _on_acquisition_error_gui(self, exc: Exception) -> None:
         """Slot (GUI thread) for errors from the DAQ thread."""
