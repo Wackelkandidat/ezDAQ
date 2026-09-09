@@ -225,6 +225,7 @@ class MainWindow(QMainWindow):
         self._modal_setup_view.start_measurement_requested.connect(self._on_modal_start_measurement)
         self._modal_setup_view.stop_requested.connect(self._on_modal_stop_measurement)
         self._modal_setup_view.storage_path_requested.connect(self._on_choose_storage_path)
+        self._modal_live_view.stop_requested.connect(self._on_modal_stop_measurement)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
         self._live_view.stop_requested.connect(self._on_stop_measurement)
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
@@ -1550,13 +1551,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_modal_start_measurement(self, config: MeasurementConfig) -> None:
-        """Starts a modal-analysis measurement - the raw multi-channel
-        recording only; the impact-triggered live display
-        (`gui/modal_live_view.py::ModalLiveView`) is wired up in a later
-        step (it will consume the same running session as an additional
-        ring-buffer reader, exactly like `LiveView` does for the
-        standard mode - nothing about starting the measurement itself
-        needs to change for that).
+        """Starts a modal-analysis measurement: the raw multi-channel
+        recording AND the impact-triggered live display
+        (`gui/modal_live_view.py::ModalLiveView.start_display`), which
+        consumes the same running session as an additional ring-buffer
+        reader - exactly like `LiveView` does for the standard mode,
+        just driven by hammer strikes instead of a continuous sweep.
 
         Deliberately NOT a call into `_on_start_measurement`: that
         method hardcodes `self._setup_view` for error display/
@@ -1595,9 +1595,8 @@ class MainWindow(QMainWindow):
             self._modal_setup_view.show_error(f"{t('cannot_start_measurement')}:\n{exc}")
             return
 
-        self._configuration_manager.update_last_modal_config(
-            self._modal_setup_view.current_modal_config()
-        )
+        modal_config = self._modal_setup_view.current_modal_config()
+        self._configuration_manager.update_last_modal_config(modal_config)
 
         rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
         effective_tick_rate_hz = max(
@@ -1613,6 +1612,7 @@ class MainWindow(QMainWindow):
             sample_rate_hz=effective_tick_rate_hz,
         )
         self._modal_storage_writer.start()
+        self._modal_live_view.start_display(modal_config, effective_tick_rate_hz)
 
         self._modal_setup_view.set_start_enabled(False, "measurement_running")
         self._set_nav_index(_VIEW_MODAL_LIVE)
@@ -1632,6 +1632,7 @@ class MainWindow(QMainWindow):
         serial-listener/auto-rearm handling modal mode never uses."""
         device_infos = self._controller.active_device_infos
         session = self._controller.stop_measurement()
+        self._modal_live_view.stop_display()
 
         if self._modal_storage_writer is not None:
             self._modal_storage_writer.stop()
@@ -1654,16 +1655,33 @@ class MainWindow(QMainWindow):
         self._modal_setup_view.set_start_enabled(True)
 
     def _on_acquisition_error_gui(self, exc: Exception) -> None:
-        """Slot (GUI thread) for errors from the DAQ thread."""
+        """Slot (GUI thread) for errors from the DAQ thread.
+
+        Registered once as a GLOBAL error listener
+        (`self._controller.add_error_listener`, see `__init__`), so it
+        fires regardless of which mode's measurement was actually
+        running - both the standard AND the modal cleanup are therefore
+        run defensively here, each guarded by its own None-check, so
+        only the side that was truly active does anything. Without this,
+        a hardware failure (e.g. a network cDAQ chassis dropping out)
+        during a modal-analysis measurement would leave
+        `ModalLiveView`'s timer/reader running against a session the
+        controller has already torn down.
+        """
         self._live_view.stop_display()
+        self._modal_live_view.stop_display()
         if self._storage_writer is not None:
             self._storage_writer.stop()
             self._storage_writer = None
+        if self._modal_storage_writer is not None:
+            self._modal_storage_writer.stop()
+            self._modal_storage_writer = None
         # The controller has already cleaned up the hardware; here only
         # the state needs a final sync (idempotent).
         self._controller.stop_measurement()
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
+        self._modal_setup_view.set_start_enabled(True)
         # The arm button must not stay pressed after a hardware error -
         # otherwise the (broken) measurement would immediately be
         # automatically retried.

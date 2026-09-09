@@ -469,6 +469,26 @@ _translations = {
             "Bitte mindestens einen Antwortkanal (X, Y oder Z) zuweisen, bevor "
             "die Messung gestartet wird."
         ),
+        "modal_axis_selector_label": "Achse",
+        "modal_response_plot_label": "Antwort",
+        "modal_amplitude_axis_label": "Amplitude",
+        "modal_phase_axis_label": "Phase [°]",
+        "modal_coherence_axis_label": "Kohärenz",
+        "modal_db_toggle": "dB",
+        "modal_undo_button": "Letzten Schlag verwerfen",
+        "modal_reset_button": "Zurücksetzen",
+        "modal_hit_table_number": "#",
+        "modal_hit_table_status": "Status",
+        "modal_row_pending": "wartet",
+        "modal_row_captured": "erfasst",
+        "modal_row_skipped": "übersprungen",
+        "modal_overload_rejected": "Übersteuerung erkannt - Schlag verworfen.",
+        "modal_double_hit_title": "Doppelschlag erkannt",
+        "modal_double_hit_body": (
+            "Dieser Schlag wurde nicht in die Mittelung übernommen."
+        ),
+        "modal_double_hit_retry": "Erneut versuchen",
+        "modal_double_hit_skip": "Diesen Schlag überspringen",
         "ok": "OK",
         "cancel": "Abbrechen",
         "close_button": "Schließen",
@@ -1011,6 +1031,26 @@ _translations = {
             "Please assign at least one response channel (X, Y, or Z) "
             "before starting the measurement."
         ),
+        "modal_axis_selector_label": "Axis",
+        "modal_response_plot_label": "Response",
+        "modal_amplitude_axis_label": "Amplitude",
+        "modal_phase_axis_label": "Phase [°]",
+        "modal_coherence_axis_label": "Coherence",
+        "modal_db_toggle": "dB",
+        "modal_undo_button": "Discard Last Strike",
+        "modal_reset_button": "Reset",
+        "modal_hit_table_number": "#",
+        "modal_hit_table_status": "Status",
+        "modal_row_pending": "pending",
+        "modal_row_captured": "captured",
+        "modal_row_skipped": "skipped",
+        "modal_overload_rejected": "Overload detected - strike discarded.",
+        "modal_double_hit_title": "Double Hit Detected",
+        "modal_double_hit_body": (
+            "This strike was not included in the average."
+        ),
+        "modal_double_hit_retry": "Retry",
+        "modal_double_hit_skip": "Skip This Strike",
         "ok": "OK",
         "cancel": "Cancel",
         "close_button": "Close",
