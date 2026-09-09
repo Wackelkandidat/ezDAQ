@@ -419,6 +419,19 @@ _translations = {
         "menu_theme": "Design",
         "theme_light": "Hell",
         "theme_dark": "Dunkel",
+        "menu_mode": "Modus",
+        "mode_standard": "Standard",
+        "mode_modal": "Modalanalyse",
+        "mode_switch_blocked_while_running": (
+            "Der Modus kann nicht während einer laufenden Messung "
+            "gewechselt werden."
+        ),
+        "modal_setup_placeholder": (
+            "Modalanalyse - Konfiguration folgt in einem späteren Schritt."
+        ),
+        "modal_live_placeholder": (
+            "Modalanalyse - Live-Ansicht folgt in einem späteren Schritt."
+        ),
         "ok": "OK",
         "cancel": "Abbrechen",
         "close_button": "Schließen",
@@ -912,6 +925,18 @@ _translations = {
         "menu_theme": "Theme",
         "theme_light": "Light",
         "theme_dark": "Dark",
+        "menu_mode": "Mode",
+        "mode_standard": "Standard",
+        "mode_modal": "Modal Analysis",
+        "mode_switch_blocked_while_running": (
+            "The mode cannot be changed while a measurement is running."
+        ),
+        "modal_setup_placeholder": (
+            "Modal analysis - configuration coming in a later step."
+        ),
+        "modal_live_placeholder": (
+            "Modal analysis - live view coming in a later step."
+        ),
         "ok": "OK",
         "cancel": "Cancel",
         "close_button": "Close",

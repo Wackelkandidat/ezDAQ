@@ -136,6 +136,14 @@ class AppSettings:
             `gui/live_view.py::LiveView.set_plot_columns`). A view
             setting, not a channel property - hence here rather than
             on `data.models.Channel`.
+        app_mode: Which application mode is active - "standard" (the
+            ordinary Setup/Live/Analysis views) or "modal" (experimental
+            impact-hammer modal analysis, see
+            `gui/modal_setup_view.py`/`gui/modal_live_view.py`). Restored
+            on startup so the app reopens in the mode it was closed in.
+        last_modal_config: Last used modal analysis configuration, as
+            raw data from `data.models.ModalAnalysisConfig.to_dict()`
+            (analogous to `last_trigger_config` above).
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -156,6 +164,8 @@ class AppSettings:
     last_recording_stop_unit: str = "samples"
     last_trigger_config: dict = field(default_factory=dict)
     live_view_plot_columns: int = 1
+    app_mode: str = "standard"
+    last_modal_config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serializes the settings into a JSON-compatible dictionary."""
@@ -198,4 +208,6 @@ class AppSettings:
             # Clamped: a stored 0 or a negative value would make the
             # grid layout divide by zero (see `_rebuild_plots`).
             live_view_plot_columns=max(1, int(data.get("live_view_plot_columns", 1))),
+            app_mode=data.get("app_mode", "standard"),
+            last_modal_config=data.get("last_modal_config", {}) or {},
         )

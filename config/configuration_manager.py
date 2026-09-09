@@ -24,7 +24,7 @@ from config.settings import (
     get_config_directory,
 )
 from config.json_helpers import load_json_list
-from data.models import Channel, MeasurementConfig, TriggerConfig
+from data.models import Channel, MeasurementConfig, ModalAnalysisConfig, TriggerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,20 @@ class ConfigurationManager:
         with `update_last_measurement_parameters`, these values are
         automatically pre-filled on the next app start."""
         self._settings.last_trigger_config = trigger.to_dict()
+        self.save_settings()
+
+    def update_app_mode(self, mode: str) -> None:
+        """Remembers the active application mode ("standard"/"modal",
+        see `gui/main_window.py::MainWindow._on_mode_action_triggered`)
+        so the app reopens in the same mode it was closed in."""
+        self._settings.app_mode = mode
+        self.save_settings()
+
+    def update_last_modal_config(self, config: ModalAnalysisConfig) -> None:
+        """Remembers the last used modal analysis configuration (see
+        `data/models.py::ModalAnalysisConfig`) - same pattern as
+        `update_last_trigger_settings`."""
+        self._settings.last_modal_config = config.to_dict()
         self.save_settings()
 
     # ------------------------------------------------------------------ #

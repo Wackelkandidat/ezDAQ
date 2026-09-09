@@ -21,6 +21,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+import numpy as np
+
 
 class ModuleType(str, Enum):
     """Supported NI cDAQ module types.
@@ -641,6 +643,37 @@ class TriggerCondition:
         )
 
 
+def evaluate_threshold_crossings(values: np.ndarray, condition: TriggerCondition) -> np.ndarray:
+    """Vectorized counterpart to
+    `gui/live_view.py::LiveView._evaluate_threshold_condition` - same
+    RISES_ABOVE/FALLS_BELOW/ABS_EXCEEDS rule, but for a whole block of
+    samples at once instead of a single reading.
+
+    Deliberately placed here rather than reused by importing from
+    `gui/live_view.py`: `data/`/`core/` must never depend on `gui/` -
+    `gui/live_view.py` stays completely untouched, this is a small,
+    independent mirror of the same three-line rule for callers (e.g. an
+    impact detector) that need to scan an entire block rather than only
+    the latest sample.
+
+    Args:
+        values: One block of samples, already in physical units.
+        condition: The condition to evaluate - only
+            `threshold_value`/`threshold_direction` are used.
+
+    Returns:
+        Boolean array of the same shape as `values`, True where the
+        condition holds.
+    """
+    threshold = condition.threshold_value
+    direction = condition.threshold_direction
+    if direction == TriggerDirection.RISES_ABOVE:
+        return values > threshold
+    if direction == TriggerDirection.FALLS_BELOW:
+        return values < threshold
+    return np.abs(values) > threshold  # ABS_EXCEEDS
+
+
 @dataclass
 class TriggerConfig:
     """Configuration for automatic measurement start AND/OR stop.
@@ -697,6 +730,126 @@ class TriggerConfig:
             stop=TriggerCondition.from_dict(data.get("stop", {}) or {}),
             pretrigger_seconds=data.get("pretrigger_seconds", 5.0),
             auto_rearm=data.get("auto_rearm", False),
+        )
+
+
+@dataclass
+class ModalAnalysisConfig:
+    """Configuration for the experimental modal analysis mode (impact
+    hammer + accelerometer) - see `gui/modal_setup_view.py` and
+    `gui/modal_live_view.py`.
+
+    A hammer strike above `impact_condition` is captured as a fixed-size
+    block (`analysis/modal_analysis.py::ModalAverager`,
+    `core/impact_detector.py::ImpactDetector`) and averaged into a
+    running H1/H2 frequency response function plus coherence.
+
+    Attributes:
+        excitation_channel_hardware_id: Hardware channel of the impact
+            hammer (`Channel.hardware_channel`).
+        response_channel_hardware_id: Hardware channel of the response
+            accelerometer.
+        excitation_window: Time window applied to the excitation block
+            before the FFT - "force" (short plateau, then a fast drop to
+            suppress post-pulse noise) or "rectangular".
+        response_window: Time window applied to the response block -
+            "exponential" (damps a not-yet-decayed ringdown before the
+            FFT wraps), "hann", or "rectangular".
+        frequency_resolution_hz: Desired frequency spacing Δf. The block
+            size in samples is derived from this and the sample rate
+            (block_size = round(fs / Δf)) rather than being configured
+            directly - Δf is the quantity that actually matters for
+            resolving close resonances.
+        num_averages_target: How many accepted impacts make up one
+            complete average (shown as "N / target" in the live view).
+        estimator: Frequency response estimator - "h1" (Gxf/Gff, good
+            for a noisy response and a clean force signal - the normal
+            case for hammer testing) or "h2" (Gxx/Gfx, good for a noisy
+            excitation).
+        frf_quantity: Which quantity is DISPLAYED by default -
+            "accelerance" (response/force, measured directly, no
+            division by omega, no singularity at 0 Hz), "mobility"
+            (velocity/force) or "receptance" (displacement/force). All
+            three are derived from the same complex measurement, see
+            `analysis/modal_analysis.py::ModalAverager.frf`.
+        impact_condition: Reuses `TriggerCondition` - the same
+            channel/threshold/direction description already used for
+            `TriggerConfig.start`/`.stop` - to describe "the excitation
+            channel exceeds X". Only the THRESHOLD-relevant fields
+            (`threshold_channel_hardware_id`, `threshold_value`,
+            `threshold_direction`) are used; `kind` is not evaluated
+            here.
+        pretrigger_ms: How many milliseconds BEFORE the detected impact
+            instant are included in the captured block (like the
+            existing recording pre-roll, but per impact rather than per
+            measurement) - see `core/ringbuffer.py::RingBuffer.
+            register_reader`.
+        double_hit_window_ms: Time window at the start of a captured
+            excitation block within which a second peak counts as a
+            double hit rather than noise.
+        double_hit_relative_threshold: A second peak within
+            `double_hit_window_ms` counts as a double hit only if it
+            reaches at least this fraction of the main peak - filters
+            out ordinary hammer-tip ringing.
+        min_rest_time_ms: Minimum quiet time after a captured block
+            before the detector arms again - prevents the response
+            ringdown of the same strike from being mistaken for a new
+            one.
+        overload_fraction: A captured block is rejected as overloaded if
+            either channel's absolute value reaches this fraction of its
+            configured range (`Channel.max_range`).
+    """
+
+    excitation_channel_hardware_id: str = ""
+    response_channel_hardware_id: str = ""
+    excitation_window: str = "force"
+    response_window: str = "exponential"
+    frequency_resolution_hz: float = 1.0
+    num_averages_target: int = 5
+    estimator: str = "h1"
+    frf_quantity: str = "accelerance"
+    impact_condition: TriggerCondition = field(default_factory=TriggerCondition)
+    pretrigger_ms: float = 5.0
+    double_hit_window_ms: float = 5.0
+    double_hit_relative_threshold: float = 0.5
+    min_rest_time_ms: float = 200.0
+    overload_fraction: float = 0.95
+
+    def to_dict(self) -> dict:
+        return {
+            "excitation_channel_hardware_id": self.excitation_channel_hardware_id,
+            "response_channel_hardware_id": self.response_channel_hardware_id,
+            "excitation_window": self.excitation_window,
+            "response_window": self.response_window,
+            "frequency_resolution_hz": self.frequency_resolution_hz,
+            "num_averages_target": self.num_averages_target,
+            "estimator": self.estimator,
+            "frf_quantity": self.frf_quantity,
+            "impact_condition": self.impact_condition.to_dict(),
+            "pretrigger_ms": self.pretrigger_ms,
+            "double_hit_window_ms": self.double_hit_window_ms,
+            "double_hit_relative_threshold": self.double_hit_relative_threshold,
+            "min_rest_time_ms": self.min_rest_time_ms,
+            "overload_fraction": self.overload_fraction,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ModalAnalysisConfig":
+        return cls(
+            excitation_channel_hardware_id=data.get("excitation_channel_hardware_id", ""),
+            response_channel_hardware_id=data.get("response_channel_hardware_id", ""),
+            excitation_window=data.get("excitation_window", "force"),
+            response_window=data.get("response_window", "exponential"),
+            frequency_resolution_hz=data.get("frequency_resolution_hz", 1.0),
+            num_averages_target=data.get("num_averages_target", 5),
+            estimator=data.get("estimator", "h1"),
+            frf_quantity=data.get("frf_quantity", "accelerance"),
+            impact_condition=TriggerCondition.from_dict(data.get("impact_condition", {}) or {}),
+            pretrigger_ms=data.get("pretrigger_ms", 5.0),
+            double_hit_window_ms=data.get("double_hit_window_ms", 5.0),
+            double_hit_relative_threshold=data.get("double_hit_relative_threshold", 0.5),
+            min_rest_time_ms=data.get("min_rest_time_ms", 200.0),
+            overload_fraction=data.get("overload_fraction", 0.95),
         )
 
 

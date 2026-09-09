@@ -66,6 +66,8 @@ from data.naming import (
     resolve_measurement_name,
 )
 from gui.analysis_view import AnalysisView
+from gui.modal_live_view import ModalLiveView
+from gui.modal_setup_view import ModalSetupView
 from gui.i18n import connect_language_changed, get_language, set_language, t
 from gui.live_view import LiveView
 from gui.serial_trigger import SerialTriggerListener
@@ -91,6 +93,13 @@ logger = logging.getLogger(__name__)
 _VIEW_SETUP = 0
 _VIEW_LIVE = 1
 _VIEW_ANALYSIS = 2
+# Modal-analysis counterparts of Setup/Live, appended AFTER the three
+# standard pages so none of their indices (or the many call sites that
+# hardcode them, e.g. `_set_nav_index(_VIEW_LIVE)`) need to change - see
+# `_resolve_workspace_index()`. Analysis has no modal counterpart, it is
+# shared by both modes.
+_VIEW_MODAL_SETUP = 3
+_VIEW_MODAL_LIVE = 4
 
 # (Row index, i18n key, icon-draw function) per navigation tile - a single
 # source of truth for `_build_navigation_and_workspace()` and
@@ -161,6 +170,13 @@ class MainWindow(QMainWindow):
         # there).
         self._recording_started: bool = False
 
+        # Active application mode ("standard"/"modal", see
+        # `_resolve_workspace_index`/`_on_mode_action_triggered`) -
+        # restored from settings, falling back to "standard" for an
+        # unknown/corrupted stored value rather than raising.
+        stored_mode = configuration_manager.settings.app_mode
+        self._app_mode: str = stored_mode if stored_mode in ("standard", "modal") else "standard"
+
         self.setWindowTitle(t("window_title"))
         # .ico instead of .png (see main.py) - multiple resolutions for the
         # title bar/taskbar instead of a single 256px size.
@@ -172,6 +188,8 @@ class MainWindow(QMainWindow):
         self._setup_view = SetupView(configuration_manager, self._sensor_database)
         self._live_view = LiveView(controller)
         self._analysis_view = AnalysisView()
+        self._modal_setup_view = ModalSetupView()
+        self._modal_live_view = ModalLiveView(controller)
 
         self._build_navigation_and_workspace()
         self._build_menu()
@@ -375,9 +393,11 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(nav_container)
 
         self._workspace = QStackedWidget()
-        self._workspace.addWidget(self._setup_view)      # index 0
-        self._workspace.addWidget(self._live_view)       # index 1
-        self._workspace.addWidget(self._analysis_view)   # index 2
+        self._workspace.addWidget(self._setup_view)       # index 0 = _VIEW_SETUP
+        self._workspace.addWidget(self._live_view)        # index 1 = _VIEW_LIVE
+        self._workspace.addWidget(self._analysis_view)    # index 2 = _VIEW_ANALYSIS
+        self._workspace.addWidget(self._modal_setup_view) # index 3 = _VIEW_MODAL_SETUP
+        self._workspace.addWidget(self._modal_live_view)  # index 4 = _VIEW_MODAL_LIVE
         # "Data management" currently shares the analysis view (loading
         # saved measurements); a dedicated management view will follow
         # later.
@@ -385,6 +405,26 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._set_nav_index(_VIEW_SETUP)
+
+    def _resolve_workspace_index(self, nav_row: int) -> int:
+        """Translates a nav-tile row (always 0/1/2 - see `_NAV_ITEMS`)
+        into the actual `_workspace` page for the CURRENTLY active
+        application mode.
+
+        In "modal" mode, Setup/Live resolve to their modal counterparts
+        instead; Analysis (row 2) always maps straight through, since it
+        is shared by both modes and has no modal counterpart. Routing
+        every workspace-index lookup through this one place means the
+        many existing call sites that pass `_VIEW_SETUP`/`_VIEW_LIVE`
+        (`_set_nav_index(_VIEW_LIVE)` after starting a measurement,
+        etc.) do not need to change at all.
+        """
+        if self._app_mode == "modal":
+            if nav_row == _VIEW_SETUP:
+                return _VIEW_MODAL_SETUP
+            if nav_row == _VIEW_LIVE:
+                return _VIEW_MODAL_LIVE
+        return min(nav_row, _VIEW_ANALYSIS)
 
     def _set_nav_index(self, index: int) -> None:
         """Programmatically selects a navigation tile.
@@ -394,7 +434,7 @@ class MainWindow(QMainWindow):
         is set explicitly here as well.
         """
         self._nav_buttons[index].setChecked(True)
-        self._workspace.setCurrentIndex(min(index, _VIEW_ANALYSIS))
+        self._workspace.setCurrentIndex(self._resolve_workspace_index(index))
         self._update_nav_tile_elevation()
 
     def _update_nav_tile_elevation(self) -> None:
@@ -505,6 +545,26 @@ class MainWindow(QMainWindow):
         current_theme_action.setChecked(True)
         self._theme_action_group.triggered.connect(self._on_theme_action_triggered)
 
+        self._mode_menu = self._settings_menu.addMenu(t("menu_mode"))
+        self._mode_action_group = QActionGroup(self)
+        self._mode_action_group.setExclusive(True)
+
+        self._mode_standard_action = self._mode_menu.addAction(t("mode_standard"))
+        self._mode_standard_action.setCheckable(True)
+        self._mode_standard_action.setData("standard")
+        self._mode_action_group.addAction(self._mode_standard_action)
+
+        self._mode_modal_action = self._mode_menu.addAction(t("mode_modal"))
+        self._mode_modal_action.setCheckable(True)
+        self._mode_modal_action.setData("modal")
+        self._mode_action_group.addAction(self._mode_modal_action)
+
+        current_mode_action = (
+            self._mode_standard_action if self._app_mode == "standard" else self._mode_modal_action
+        )
+        current_mode_action.setChecked(True)
+        self._mode_action_group.triggered.connect(self._on_mode_action_triggered)
+
         self._settings_menu.addSeparator()
         self._channel_display_action = self._settings_menu.addAction(
             f"{t('menu_channel_display')}..."
@@ -565,6 +625,35 @@ class MainWindow(QMainWindow):
         new_theme = action.data()
         set_theme(new_theme)
         self._configuration_manager.update_theme(new_theme)
+
+    def _on_mode_action_triggered(self, action) -> None:
+        """Triggered when the user clicks Standard/Modalanalyse in the
+        Settings -> Mode menu - swaps the Setup/Live pages (see
+        `_resolve_workspace_index`), persists the choice
+        (`config/configuration_manager.py::update_app_mode`), and stays
+        on whichever nav tile (Setup/Live/Analysis) is currently
+        selected.
+
+        Refused while a measurement is running: switching would hide
+        the view actually driving the running measurement out from
+        under the user, and (once `ModalLiveView` is wired to a live
+        ring-buffer reader) could leave two views competing for the
+        same reader. The action group's checked state is reverted to
+        the mode that is actually still active, since Qt already
+        toggled it visually before this handler ran.
+        """
+        if self._controller.is_running:
+            current_action = (
+                self._mode_standard_action
+                if self._app_mode == "standard"
+                else self._mode_modal_action
+            )
+            current_action.setChecked(True)
+            self._status_label.setText(t("mode_switch_blocked_while_running"))
+            return
+        self._app_mode = action.data()
+        self._configuration_manager.update_app_mode(self._app_mode)
+        self._set_nav_index(self._nav_button_group.checkedId())
 
     def _on_open_channel_display_dialog(self) -> None:
         """Opens the channel display dialog with the channels configured
@@ -682,6 +771,9 @@ class MainWindow(QMainWindow):
         self._theme_menu.setTitle(t("menu_theme"))
         self._theme_light_action.setText(t("theme_light"))
         self._theme_dark_action.setText(t("theme_dark"))
+        self._mode_menu.setTitle(t("menu_mode"))
+        self._mode_standard_action.setText(t("mode_standard"))
+        self._mode_modal_action.setText(t("mode_modal"))
         self._channel_display_action.setText(f"{t('menu_channel_display')}...")
         self._sensor_database_action.setText(t("menu_sensor_database"))
         self._trigger_settings_action.setText(t("menu_trigger_settings"))
@@ -777,7 +869,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_nav_changed(self, row: int) -> None:
-        self._workspace.setCurrentIndex(min(row, _VIEW_ANALYSIS))
+        self._workspace.setCurrentIndex(self._resolve_workspace_index(row))
         self._update_nav_tile_elevation()
         # Pre-populate the live view with the channels currently
         # configured in Setup as soon as we switch there (the plot
