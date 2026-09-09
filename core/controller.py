@@ -424,8 +424,21 @@ class MeasurementController:
     # Live data for consumers (live view, storage writer)
     # ------------------------------------------------------------------ #
 
-    def register_reader(self) -> int:
+    def register_reader(self, back_samples: int = 0) -> int:
         """Registers a new live data consumer on the ring buffer.
+
+        Args:
+            back_samples: Registers the reader retroactively, up to
+                this many samples in the past (clamped to the ring
+                buffer's capacity) - see
+                `core/ringbuffer.py::RingBuffer.register_reader`.
+                Defaults to 0 (starts at "now"), so existing callers
+                (`LiveView`) keep their previous behavior unchanged.
+                Used by the experimental modal analysis mode
+                (`core/impact_detector.py`) to retroactively extract
+                the pretrigger portion of a captured impact window -
+                the same mechanism the recording pre-roll already uses
+                (see `gui/main_window.py::_on_trigger_fired`).
 
         Raises:
             RuntimeError: if no measurement is currently running.
@@ -433,7 +446,7 @@ class MeasurementController:
         with self._lock:
             if self._ring_buffer is None:
                 raise RuntimeError("Es läuft aktuell keine Messung.")
-            return self._ring_buffer.register_reader()
+            return self._ring_buffer.register_reader(back_samples=back_samples)
 
     def unregister_reader(self, reader_id: int) -> None:
         """Removes a live data consumer (e.g. when closing the live view)."""
