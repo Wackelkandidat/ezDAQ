@@ -32,7 +32,13 @@ from PyQt6.QtWidgets import QApplication
 
 from config.configuration_manager import ConfigurationManager
 from core.controller import MeasurementController
-from data.models import ModalAnalysisConfig, TriggerCondition, TriggerDirection
+from data.models import (
+    ModalAnalysisConfig,
+    ModalAxis,
+    ModalResponseChannel,
+    TriggerCondition,
+    TriggerDirection,
+)
 from gui.main_window import (
     MainWindow,
     _VIEW_ANALYSIS,
@@ -177,7 +183,11 @@ class ModalAnalysisConfigPersistenceTest(unittest.TestCase):
     def test_round_trip_preserves_the_nested_impact_condition(self) -> None:
         config = ModalAnalysisConfig(
             excitation_channel_hardware_id="cDAQ1Mod1/ai0",
-            response_channel_hardware_id="cDAQ1Mod1/ai1",
+            response_channels=[
+                ModalResponseChannel(ModalAxis.X, "cDAQ1Mod1/ai1"),
+                ModalResponseChannel(ModalAxis.Y, "cDAQ1Mod1/ai2"),
+                ModalResponseChannel(ModalAxis.Z, "cDAQ1Mod1/ai3"),
+            ],
             num_averages_target=8,
             frf_quantity="receptance",
             impact_condition=TriggerCondition(

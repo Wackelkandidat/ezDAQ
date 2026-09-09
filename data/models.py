@@ -733,6 +733,51 @@ class TriggerConfig:
         )
 
 
+class ModalAxis(str, Enum):
+    """One measurement axis of a (typically triaxial) response
+    accelerometer - see `ModalResponseChannel`.
+
+    A hammer test excites in exactly ONE direction, but a triaxial
+    accelerometer measures the response in all three at once - X/Y/Z
+    both name which physical direction a response channel belongs to
+    and let the same excitation be related to more than one response
+    axis (the cross-axis FRFs are just as informative as the
+    same-axis one, e.g. to see how much a strike along X couples into
+    Y).
+    """
+
+    X = "x"
+    Y = "y"
+    Z = "z"
+
+
+@dataclass
+class ModalResponseChannel:
+    """One response accelerometer axis assigned to a hardware channel -
+    see `ModalAnalysisConfig.response_channels`.
+
+    Kept as its own small dataclass (rather than a plain
+    `dict[ModalAxis, str]`) so the assigned channels have a stable
+    ORDER (a dict would too, but explicitly, a list of these reads
+    unambiguously wherever it is serialized/iterated) and so future
+    per-axis settings (e.g. a per-axis sensitivity override) have an
+    obvious place to live without another restructuring.
+    """
+
+    axis: ModalAxis = ModalAxis.X
+    hardware_channel_id: str = ""
+
+    def to_dict(self) -> dict:
+        return {"axis": self.axis.value, "hardware_channel_id": self.hardware_channel_id}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ModalResponseChannel":
+        return cls(
+            axis=ModalAxis(data.get("axis", ModalAxis.X.value)),
+            hardware_channel_id=data.get("hardware_channel_id", ""),
+        )
+
+
 @dataclass
 class ModalAnalysisConfig:
     """Configuration for the experimental modal analysis mode (impact
@@ -742,13 +787,23 @@ class ModalAnalysisConfig:
     A hammer strike above `impact_condition` is captured as a fixed-size
     block (`analysis/modal_analysis.py::ModalAverager`,
     `core/impact_detector.py::ImpactDetector`) and averaged into a
-    running H1/H2 frequency response function plus coherence.
+    running H1/H2 frequency response function plus coherence - ONE
+    `ModalAverager` per entry in `response_channels`, all fed the same
+    captured excitation block (see `gui/modal_live_view.py`): computing
+    the FRF is entirely per response-axis, `ImpactDetector` itself never
+    needs to know how many response axes exist.
 
     Attributes:
         excitation_channel_hardware_id: Hardware channel of the impact
-            hammer (`Channel.hardware_channel`).
-        response_channel_hardware_id: Hardware channel of the response
-            accelerometer.
+            hammer (`Channel.hardware_channel`) - always exactly ONE, a
+            hammer test excites in a single direction at a time.
+        response_channels: The response accelerometer's axes assigned
+            to hardware channels (see `ModalResponseChannel`) - 1 to 3
+            entries depending on whether a uniaxial, biaxial or
+            triaxial sensor is used. At least one is required to run a
+            measurement, but this is enforced by the setup view/
+            `core.controller`, not here (an empty list is a valid,
+            "not configured yet" state).
         excitation_window: Time window applied to the excitation block
             before the FFT - "force" (short plateau, then a fast drop to
             suppress post-pulse noise) or "rectangular".
@@ -801,7 +856,7 @@ class ModalAnalysisConfig:
     """
 
     excitation_channel_hardware_id: str = ""
-    response_channel_hardware_id: str = ""
+    response_channels: list[ModalResponseChannel] = field(default_factory=list)
     excitation_window: str = "force"
     response_window: str = "exponential"
     frequency_resolution_hz: float = 1.0
@@ -818,7 +873,7 @@ class ModalAnalysisConfig:
     def to_dict(self) -> dict:
         return {
             "excitation_channel_hardware_id": self.excitation_channel_hardware_id,
-            "response_channel_hardware_id": self.response_channel_hardware_id,
+            "response_channels": [rc.to_dict() for rc in self.response_channels],
             "excitation_window": self.excitation_window,
             "response_window": self.response_window,
             "frequency_resolution_hz": self.frequency_resolution_hz,
@@ -837,7 +892,9 @@ class ModalAnalysisConfig:
     def from_dict(cls, data: dict) -> "ModalAnalysisConfig":
         return cls(
             excitation_channel_hardware_id=data.get("excitation_channel_hardware_id", ""),
-            response_channel_hardware_id=data.get("response_channel_hardware_id", ""),
+            response_channels=[
+                ModalResponseChannel.from_dict(rc) for rc in data.get("response_channels", []) or []
+            ],
             excitation_window=data.get("excitation_window", "force"),
             response_window=data.get("response_window", "exponential"),
             frequency_resolution_hz=data.get("frequency_resolution_hz", 1.0),
